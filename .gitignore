@@ -1,0 +1,106 @@
+# 环境变量和配置文件
+.env
+.env.local
+.env.production
+.env.staging
+config.ini
+secrets.json
+
+# API密钥和敏感信息
+*api_key*
+*secret*
+*password*
+*token*
+
+# Python相关
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# 虚拟环境
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# IDE和编辑器
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# 操作系统
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# 日志文件
+*.log
+logs/
+
+# 临时文件
+*.tmp
+*.temp
+temp/
+tmp/
+
+# 数据库文件
+*.db
+*.sqlite
+*.sqlite3
+
+# 备份文件
+*.bak
+*.backup
+
+# 测试覆盖率
+.coverage
+htmlcov/
+.pytest_cache/
+
+# 大文件和媒体文件
+*.zip
+*.rar
+*.7z
+*.tar.gz
+*.mp4
+*.avi
+*.mov
+*.wmv
+*.flv
+
+# Excel临时文件
+~$*.xlsx
+~$*.xls
+*.xlsm
+
+# 测试文件夹
+tests/ 
+data/dataset.jsonl
+data/bench.jsonl
+论文/
+docs/

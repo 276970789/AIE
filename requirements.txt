@@ -1,0 +1,6 @@
+pandas
+openpyxl
+tkinter
+openai
+python-dotenv
+requests 
