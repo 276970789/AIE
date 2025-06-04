@@ -1,0 +1,37 @@
+{
+  "window": {
+    "remember_size": true,
+    "last_size": "1400x800+32+61",
+    "last_position": null
+  },
+  "ui": {
+    "row_height": "标准",
+    "theme": "modern",
+    "show_welcome": true,
+    "full_prompt_display": false
+  },
+  "ai": {
+    "default_model": "gpt-4.1",
+    "processing_params": {
+      "max_workers": 3,
+      "request_delay": 0.5,
+      "max_retries": 2
+    },
+    "auto_save_responses": true
+  },
+  "data": {
+    "auto_backup": true,
+    "backup_interval": 300,
+    "max_backups": 10
+  },
+  "export": {
+    "default_format": "xlsx",
+    "remember_last_path": true,
+    "last_export_path": null
+  },
+  "performance": {
+    "preview_length": 100,
+    "table_update_delay": 50,
+    "enable_animations": true
+  }
+}

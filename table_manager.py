@@ -7,12 +7,15 @@
 
 import pandas as pd
 import os
+from paper_processor import get_paper_processor
 
 class TableManager:
     def __init__(self):
         self.dataframe = None
         self.ai_columns = {}  # {column_name: {"prompt": prompt_template, "model": model_name}}
+        self.long_text_columns = {}  # {column_name: {"filename_field": field, "folder_path": path, "preview_length": length}}
         self.file_path = None
+        self.changes_made = False # 添加标志，追踪是否有未保存的更改
         
     def create_blank_table(self):
         """创建空白表格"""
@@ -42,11 +45,14 @@ class TableManager:
             self.file_path = None
             self.ai_columns = {}
             
+            self.changes_made = True # 创建空白表格即视为有更改
             return True
             
         except Exception as e:
             print(f"创建空白表格错误: {e}")
             return False
+        finally:
+            self.changes_made = True # 创建空白表格即视为有更改
         
     def load_file(self, file_path):
         """加载文件"""
@@ -79,6 +85,7 @@ class TableManager:
             # 填充NaN值
             self.dataframe = self.dataframe.fillna('')
             
+            self.changes_made = False # 成功加载文件，无未保存更改
             return True
             
         except Exception as e:
@@ -130,21 +137,52 @@ class TableManager:
             return list(self.dataframe.columns)
         return []
         
-    def add_ai_column(self, column_name, prompt_template, model="gpt-4.1"):
+    def add_ai_column(self, column_name, prompt_template, model="gpt-4.1", processing_params=None, output_mode="single", output_fields=None, preserve_data=False):
         """添加AI列"""
         if self.dataframe is not None:
-            # 添加空列到数据框
-            self.dataframe[column_name] = ''
-            # 保存AI列配置（包含模型信息）
+            # 添加主列到数据框（如果不存在）
+            if column_name not in self.dataframe.columns:
+                self.dataframe[column_name] = ''
+            elif not preserve_data:
+                # 如果列已存在且不保留数据，则清空
+                self.dataframe[column_name] = ''
+            
+            # 如果是多字段模式，创建对应的字段列
+            if output_mode == "multi" and output_fields:
+                for field_name in output_fields:
+                    full_column_name = f"{column_name}_{field_name}"
+                    if full_column_name not in self.dataframe.columns:
+                        self.dataframe[full_column_name] = ''
+                    elif not preserve_data:
+                        self.dataframe[full_column_name] = ''
+            
+            # 默认处理参数
+            default_params = {
+                'max_workers': 3,
+                'request_delay': 0.5,
+                'max_retries': 2
+            }
+            
+            if processing_params:
+                default_params.update(processing_params)
+            
+            # 保存AI列配置（包含模型信息、处理参数和多字段配置）
             self.ai_columns[column_name] = {
                 "prompt": prompt_template,
-                "model": model
+                "model": model,
+                "processing_params": default_params,
+                "output_mode": output_mode,
+                "output_fields": output_fields or []
             }
+            self.changes_made = True # 添加AI列即视为有更改
+            return True
+        return False
             
     def add_normal_column(self, column_name, default_value=''):
         """添加普通列"""
         if self.dataframe is not None:
             self.dataframe[column_name] = default_value
+            self.changes_made = True # 添加普通列即视为有更改
             
     def add_row(self):
         """添加新行"""
@@ -157,6 +195,7 @@ class TableManager:
                 new_df = pd.DataFrame([new_row])
                 self.dataframe = pd.concat([self.dataframe, new_df], ignore_index=True)
                 
+                self.changes_made = True # 添加行即视为有更改
                 return True
             except Exception as e:
                 print(f"添加行错误: {e}")
@@ -167,7 +206,9 @@ class TableManager:
         """清空所有数据"""
         self.dataframe = None
         self.ai_columns = {}
+        self.long_text_columns = {}
         self.file_path = None
+        self.changes_made = True # 清空数据即视为有更改
         
     def get_ai_columns(self):
         """获取AI列配置"""
@@ -191,12 +232,53 @@ class TableManager:
             if isinstance(config, dict):
                 return config.get("model", "gpt-4.1")
             else:
-                # 向后兼容：如果是旧格式，默认返回gpt-4.1
+                # 向后兼容：旧格式默认使用gpt-4.1
                 return "gpt-4.1"
         return "gpt-4.1"
     
+    def get_ai_column_processing_params(self, column_name):
+        """获取AI列的处理参数"""
+        if column_name in self.ai_columns:
+            config = self.ai_columns[column_name]
+            if isinstance(config, dict) and "processing_params" in config:
+                return config["processing_params"]
+            else:
+                # 返回默认参数
+                return {
+                    'max_workers': 3,
+                    'request_delay': 0.5,
+                    'max_retries': 2
+                }
+        return {
+            'max_workers': 3,
+            'request_delay': 0.5,
+            'max_retries': 2
+        }
+        
+    def get_ai_column_output_mode(self, column_name):
+        """获取AI列的输出模式"""
+        if column_name in self.ai_columns:
+            config = self.ai_columns[column_name]
+            if isinstance(config, dict):
+                return config.get("output_mode", "single")
+        return "single"
+        
+    def get_ai_column_output_fields(self, column_name):
+        """获取AI列的输出字段"""
+        if column_name in self.ai_columns:
+            config = self.ai_columns[column_name]
+            if isinstance(config, dict):
+                return config.get("output_fields", [])
+        return []
+        
+    def is_multi_field_ai_column(self, column_name):
+        """检查是否为多字段AI列"""
+        return (column_name in self.ai_columns and 
+                self.get_ai_column_output_mode(column_name) == "multi" and
+                len(self.get_ai_column_output_fields(column_name)) > 0)
+        
     def get_ai_columns_simple(self):
-        """获取简化的AI列配置（向后兼容）"""
+        """获取简化的AI列配置（仅包含prompt，向后兼容）"""
         simple_config = {}
         for col_name, config in self.ai_columns.items():
             if isinstance(config, dict):
@@ -209,6 +291,7 @@ class TableManager:
         """更新AI列的值"""
         if self.dataframe is not None and column_name in self.dataframe.columns:
             self.dataframe.at[row_index, column_name] = value
+            self.changes_made = True # 更新单元格值即视为有更改
             
     def get_row_data(self, row_index):
         """获取指定行的数据"""
@@ -247,19 +330,25 @@ class TableManager:
             print(f"成功导出JSONL文件: {len(self.dataframe)}行数据")
             
     def delete_column(self, column_name):
-        """删除列"""
+        """删除指定列"""
         if self.dataframe is not None and column_name in self.dataframe.columns:
             print(f"删除列: {column_name}")
             
             # 使用drop方法删除列，并直接赋值
             self.dataframe = self.dataframe.drop(columns=[column_name])
             
-            # 如果是AI列，也删除配置
+            # 从AI列配置中移除
             if column_name in self.ai_columns:
                 del self.ai_columns[column_name]
                 print(f"删除AI列配置: {column_name}")
                 
+            # 从长文本列配置中移除
+            if column_name in self.long_text_columns:
+                del self.long_text_columns[column_name]
+                print(f"删除长文本列配置: {column_name}")
+                
             print(f"删除后列名: {list(self.dataframe.columns)}")
+            self.changes_made = True # 删除列即视为有更改
             return True
         else:
             print(f"列不存在或数据框为空: {column_name}")
@@ -287,72 +376,91 @@ class TableManager:
     def rename_column(self, old_name, new_name):
         """重命名列"""
         if self.dataframe is not None and old_name in self.dataframe.columns:
-            try:
-                # 重命名DataFrame中的列
-                self.dataframe = self.dataframe.rename(columns={old_name: new_name})
-                
-                # 如果是AI列，也要更新AI配置
-                if old_name in self.ai_columns:
-                    prompt = self.ai_columns[old_name]
-                    del self.ai_columns[old_name]
-                    self.ai_columns[new_name] = prompt
-                    print(f"AI列配置已更新: {old_name} → {new_name}")
-                
-                print(f"列重命名成功: {old_name} → {new_name}")
-                return True
-            except Exception as e:
-                print(f"重命名列失败: {e}")
-                return False
-        else:
-            print(f"列不存在: {old_name}")
-            return False
+            if new_name in self.dataframe.columns:
+                return False, "新列名已存在"
+            
+            self.dataframe = self.dataframe.rename(columns={old_name: new_name})
+            
+            # 更新AI列配置
+            if old_name in self.ai_columns:
+                config = self.ai_columns.pop(old_name)
+                self.ai_columns[new_name] = config
+            
+            # 更新长文本列配置
+            if old_name in self.long_text_columns:
+                config = self.long_text_columns.pop(old_name)
+                self.long_text_columns[new_name] = config
+
+            self.changes_made = True # 重命名列即视为有更改
+            return True, ""
+        return False, "列不存在"
             
     def update_ai_column_prompt(self, column_name, new_prompt):
         """更新AI列的提示词"""
         if column_name in self.ai_columns:
-            self.ai_columns[column_name] = new_prompt
+            if isinstance(self.ai_columns[column_name], dict):
+                self.ai_columns[column_name]["prompt"] = new_prompt
+            else:
+                self.ai_columns[column_name] = new_prompt # 向后兼容旧格式
+            self.changes_made = True # 更新AI列prompt即视为有更改
             print(f"AI提示词已更新: {column_name}")
             return True
         else:
             print(f"AI列不存在: {column_name}")
             return False
     
-    def update_ai_column_config(self, column_name, new_prompt, new_model):
-        """更新AI列的完整配置（包含模型）"""
+    def update_ai_column_config(self, column_name, new_prompt, new_model, processing_params=None):
+        """更新AI列配置（包含模型信息和处理参数）"""
         if column_name in self.ai_columns:
+            config = self.ai_columns[column_name]
+            
+            # 保留现有的处理参数或使用新的
+            if processing_params is None:
+                if isinstance(config, dict) and "processing_params" in config:
+                    processing_params = config["processing_params"]
+                else:
+                    processing_params = {
+                        'max_workers': 3,
+                        'request_delay': 0.5,
+                        'max_retries': 2
+                    }
+            
             self.ai_columns[column_name] = {
                 "prompt": new_prompt,
-                "model": new_model
+                "model": new_model,
+                "processing_params": processing_params
             }
-            print(f"AI列配置已更新: {column_name} (模型: {new_model})")
-            return True
-        else:
-            print(f"AI列不存在: {column_name}")
-            return False
+            self.changes_made = True
             
     def convert_to_ai_column(self, column_name, prompt_template):
         """将普通列转换为AI列"""
         if self.dataframe is not None and column_name in self.dataframe.columns:
-            # 添加到AI列配置
-            self.ai_columns[column_name] = prompt_template
-            print(f"已转换为AI列: {column_name}")
-            return True
-        else:
-            print(f"列不存在: {column_name}")
-            return False
+            if column_name not in self.ai_columns:
+                self.ai_columns[column_name] = {"prompt": prompt_template, "model": "gpt-4.1"}
+                # 如果是长文本列，需要从长文本列配置中移除
+                if column_name in self.long_text_columns:
+                    del self.long_text_columns[column_name]
+                self.changes_made = True # 转换为AI列即视为有更改
+                print(f"已转换为AI列: {column_name}")
+                return True
+        return False
             
     def convert_to_normal_column(self, column_name):
         """将AI列转换为普通列"""
-        if column_name in self.ai_columns:
-            # 从AI列配置中移除
-            del self.ai_columns[column_name]
-            print(f"已转换为普通列: {column_name}")
-            return True
-        else:
-            print(f"AI列不存在: {column_name}")
-            return False
+        if column_name in self.dataframe.columns:
+            if column_name in self.ai_columns:
+                del self.ai_columns[column_name]
+                self.changes_made = True # 转换为普通列即视为有更改
+                print(f"已转换为普通列: {column_name}")
+                return True
+            if column_name in self.long_text_columns:
+                del self.long_text_columns[column_name]
+                self.changes_made = True # 转换为普通列即视为有更改
+                print(f"已转换为普通列: {column_name}")
+                return True
+        return False
             
-    def insert_column_at_position(self, position, column_name, prompt_template=None, is_ai_column=False, ai_model="gpt-4.1"):
+    def insert_column_at_position(self, position, column_name, prompt_template=None, is_ai_column=False, ai_model="gpt-4.1", processing_params=None, output_mode="single", output_fields=None):
         """在指定位置插入列"""
         if self.dataframe is not None:
             try:
@@ -371,13 +479,27 @@ class TableManager:
                 # 重新排列列的顺序
                 self.dataframe = self.dataframe[new_columns]
                 
-                # 如果是AI列，添加到AI配置
-                if is_ai_column and prompt_template:
-                    self.ai_columns[column_name] = {
-                        "prompt": prompt_template,
-                        "model": ai_model
+                # 更新或添加AI列配置
+                if is_ai_column:
+                    # 默认处理参数
+                    default_params = {
+                        'max_workers': 3,
+                        'request_delay': 0.5,
+                        'max_retries': 2
                     }
                     
+                    if processing_params:
+                        default_params.update(processing_params)
+                    
+                    self.ai_columns[column_name] = {
+                        "prompt": prompt_template, 
+                        "model": ai_model,
+                        "processing_params": default_params,
+                        "output_mode": output_mode or "single",
+                        "output_fields": output_fields or []
+                    }
+                    
+                self.changes_made = True # 插入列即视为有更改
                 print(f"已在位置{position}插入列: {column_name}")
                 return True
                 
@@ -416,6 +538,7 @@ class TableManager:
                 # 重新排列DataFrame的列
                 self.dataframe = self.dataframe[new_columns]
                 
+                self.changes_made = True # 移动列即视为有更改
                 print(f"已移动列 '{column_to_move}' 从位置{from_index}到位置{to_index}")
                 return True
                 
@@ -438,6 +561,7 @@ class TableManager:
                 # 删除指定行
                 self.dataframe = self.dataframe.drop(self.dataframe.index[row_index]).reset_index(drop=True)
                 
+                self.changes_made = True # 删除行即视为有更改
                 print(f"已删除第{row_index + 1}行")
                 return True
                 
@@ -474,6 +598,7 @@ class TableManager:
                     new_df = pd.concat([before, pd.DataFrame([new_row]), after], ignore_index=True)
                 
                 self.dataframe = new_df
+                self.changes_made = True # 插入行即视为有更改
                 print(f"已在位置{position}插入新行")
                 return True
                 
@@ -483,3 +608,221 @@ class TableManager:
         else:
             print("数据框为空，无法插入行")
             return False 
+    
+    # ==================== 长文本列相关方法 ====================
+    
+    def add_long_text_column(self, column_name, filename_field, folder_path, preview_length=200):
+        """添加长文本列"""
+        if self.dataframe is not None:
+            # 添加空列到数据框
+            self.dataframe[column_name] = ''
+            
+            # 保存长文本列配置
+            self.long_text_columns[column_name] = {
+                "filename_field": filename_field,
+                "folder_path": folder_path,
+                "preview_length": preview_length
+            }
+            
+            # 立即加载所有行的长文本内容
+            self.refresh_long_text_column(column_name)
+            
+            self.changes_made = True # 添加长文本列即视为有更改
+            print(f"已添加长文本列: {column_name}")
+            return True
+        return False
+    
+    def refresh_long_text_column(self, column_name):
+        """刷新长文本列的内容"""
+        print(f"DEBUG: refresh_long_text_column called for '{column_name}'")
+        
+        if (column_name not in self.long_text_columns or 
+            self.dataframe is None or 
+            column_name not in self.dataframe.columns):
+            print(f"DEBUG: Early return - column_name in long_text_columns: {column_name in self.long_text_columns}")
+            print(f"DEBUG: dataframe is not None: {self.dataframe is not None}")
+            if self.dataframe is not None:
+                print(f"DEBUG: column_name in dataframe.columns: {column_name in self.dataframe.columns}")
+            return False
+            
+        config = self.long_text_columns[column_name]
+        filename_field = config["filename_field"]
+        folder_path = config["folder_path"]
+        preview_length = config.get("preview_length", 200)
+        
+        print(f"DEBUG: Config - filename_field: {filename_field}, folder_path: {folder_path}, preview_length: {preview_length}")
+        
+        # 检查文件名字段是否存在
+        if filename_field not in self.dataframe.columns:
+            print(f"文件名字段不存在: {filename_field}")
+            return False
+        
+        try:
+            # 使用优化的处理器
+            processor = get_paper_processor()
+            
+            # 获取所有文件名
+            import pandas as pd
+            filename_values = [str(row[filename_field]).strip() if pd.notna(row[filename_field]) else "" 
+                              for _, row in self.dataframe.iterrows()]
+            
+            print(f"DEBUG: Found filename patterns: {filename_values}")
+            
+            # 批量加载预览
+            previews = processor.batch_load_previews(filename_values, folder_path, preview_length)
+            
+            print(f"DEBUG: Generated {len(previews)} previews")
+            
+            # 更新列内容
+            for index, row in self.dataframe.iterrows():
+                filename_pattern = str(row[filename_field]).strip()
+                if filename_pattern:
+                    preview_content = previews.get(filename_pattern, f"未找到文件: {filename_pattern}")
+                    self.dataframe.at[index, column_name] = preview_content
+                    print(f"DEBUG: Row {index}, pattern '{filename_pattern}' -> preview: {preview_content[:50]}...")
+                else:
+                    self.dataframe.at[index, column_name] = "[文件名为空]"
+                    print(f"DEBUG: Row {index}, empty filename -> '[文件名为空]'")
+            
+            print(f"已刷新长文本列: {column_name}")
+            return True
+            
+        except Exception as e:
+            print(f"刷新长文本列失败: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+    
+    def get_long_text_columns(self):
+        """获取长文本列配置"""
+        return self.long_text_columns
+    
+    def get_long_text_content(self, column_name, row_index):
+        """获取指定行的完整长文本内容"""
+        if (column_name not in self.long_text_columns or 
+            self.dataframe is None or 
+            row_index >= len(self.dataframe)):
+            return None
+            
+        config = self.long_text_columns[column_name]
+        filename_field = config["filename_field"]
+        folder_path = config["folder_path"]
+        
+        # 获取文件名
+        filename_pattern = str(self.dataframe.iloc[row_index][filename_field]).strip()
+        if not filename_pattern:
+            return None
+            
+        try:
+            # 使用优化的处理器
+            processor = get_paper_processor()
+            files_map = processor.find_files_in_folder(folder_path)
+            
+            file_path = files_map.get(filename_pattern)
+            if file_path:
+                return processor.get_file_content(file_path)
+            else:
+                return None
+        except Exception as e:
+            print(f"获取长文本内容失败: {e}")
+            return None
+    
+    def is_long_text_column(self, column_name):
+        """检查指定列是否为长文本列"""
+        return column_name in self.long_text_columns
+    
+    def delete_long_text_column(self, column_name):
+        """删除长文本列配置"""
+        if column_name in self.long_text_columns:
+            del self.long_text_columns[column_name]
+            self.changes_made = True # 删除长文本列配置即视为有更改
+            print(f"已删除长文本列配置: {column_name}")
+            return True
+        return False
+    
+    def update_long_text_column_config(self, column_name, filename_field, folder_path, preview_length=200):
+        """更新长文本列配置"""
+        if column_name in self.long_text_columns:
+            self.long_text_columns[column_name] = {
+                "filename_field": filename_field,
+                "folder_path": folder_path,
+                "preview_length": preview_length
+            }
+            self.changes_made = True # 更新长文本列配置即视为有更改
+            # 刷新该列内容
+            self.refresh_long_text_column(column_name)
+            print(f"已更新长文本列配置: {column_name}")
+            return True
+        return False
+
+    def reset_changes_flag(self):
+        """重置changes_made标志为False"""
+        self.changes_made = False
+        
+    def has_unsaved_changes(self):
+        """检查是否有未保存的更改"""
+        return self.changes_made
+        
+    def import_from_jsonl(self, match_field, source_field, column_name, jsonl_df, position=None):
+        """从JSONL数据导入到新列. 若提供position, 则在该位置插入,否则追加到末尾."""
+        if self.dataframe is None:
+            return False, "当前没有数据表格"
+            
+        try:
+            # 检查匹配字段是否存在
+            if match_field not in self.dataframe.columns:
+                return False, f"当前表格中不存在匹配字段 '{match_field}'"
+                
+            if source_field not in jsonl_df.columns:
+                return False, f"JSONL数据中不存在源字段 '{source_field}'"
+                
+            # 检查列名是否已存在
+            if column_name in self.dataframe.columns:
+                # This check might be redundant if JsonlImportDialog already ensures unique name,
+                # but good for safety.
+                return False, f"列名 '{column_name}' 已存在"
+                
+            #准备一个空的Series来填充数据，长度与当前dataframe一致
+            import pandas as pd
+            # Initialize with a default value (e.g., empty string) that matches expected type
+            new_column_data = pd.Series([''] * len(self.dataframe), index=self.dataframe.index, dtype=object)
+
+            # 执行匹配和导入
+            matched_count = 0
+            total_rows_in_df = len(self.dataframe)
+            
+            # Iterating over the current dataframe to fill the new_column_data Series
+            for idx, row_data in self.dataframe.iterrows(): # Use self.dataframe.iterrows()
+                match_value = row_data[match_field]
+                
+                # 在JSONL数据中查找匹配项
+                # Ensure match_value type is compatible with jsonl_df[match_field] type
+                # If types can mismatch (e.g. int vs str), explicit conversion might be needed.
+                # For now, assume types are compatible or pandas handles it.
+                jsonl_match = jsonl_df[jsonl_df[match_field] == match_value]
+                
+                if not jsonl_match.empty:
+                    import_value = jsonl_match.iloc[0][source_field]
+                    # Use .loc for assigning to Series to ensure alignment by index
+                    new_column_data.loc[idx] = str(import_value) if pd.notna(import_value) else ''
+                    matched_count += 1
+            
+            # 将填充好的Series插入到DataFrame
+            if position is not None:
+                # Ensure position is within valid bounds
+                if not (0 <= position <= len(self.dataframe.columns)):
+                    return False, f"提供的插入位置 {position} 无效."
+                self.dataframe.insert(loc=position, column=column_name, value=new_column_data)
+            else:
+                # Append as before
+                self.dataframe[column_name] = new_column_data
+                    
+            self.changes_made = True
+            
+            return True, f"成功导入 {matched_count}/{total_rows_in_df} 行数据到列 '{column_name}'"
+            
+        except Exception as e:
+            import traceback
+            print(f"Error during JSONL import: {e}")
+            traceback.print_exc()
+            return False, f"导入失败: {e}"

@@ -52,6 +52,13 @@ class ProjectManager:
                     "prompt_templates": {}
                 }
                 
+                # 长文本列配置
+                long_text_columns = table_manager.get_long_text_columns()
+                project_data["long_text_config"] = {
+                    "long_text_columns": long_text_columns,
+                    "long_text_column_count": len(long_text_columns)
+                }
+                
                 # 保存每个AI列的详细配置
                 for col_name, prompt in ai_columns.items():
                     # 如果是旧格式的prompt（字符串），将其转换为字典格式
@@ -73,7 +80,7 @@ class ProjectManager:
                     }
                 
                 # 普通列信息
-                normal_columns = [col for col in df.columns if col not in ai_columns]
+                normal_columns = [col for col in df.columns if col not in ai_columns and col not in long_text_columns]
                 project_data["normal_columns"] = normal_columns
                 
                 # 界面状态（可选）
@@ -91,6 +98,7 @@ class ProjectManager:
                 # 空项目
                 project_data["table_data"] = None
                 project_data["ai_config"] = {"ai_columns": {}, "ai_column_count": 0}
+                project_data["long_text_config"] = {"long_text_columns": {}, "long_text_column_count": 0}
                 project_data["normal_columns"] = []
                 project_data["ui_state"] = {}
             
@@ -115,7 +123,7 @@ class ProjectManager:
             
             # 验证文件格式
             if project_data.get("format_version") != self.project_format_version:
-                return False, f"不支持的项目文件格式版本: {project_data.get('format_version')}"
+                return False, f"不支持的项目文件格式版本: {project_data.get('format_version')}", {}
             
             # 恢复表格数据
             table_data = project_data.get("table_data")
@@ -131,27 +139,45 @@ class ProjectManager:
                     # 设置到table_manager
                     table_manager.dataframe = df
                     
+                    # 清空table_manager中现有的AI列和长文本列配置，避免重复
+                    table_manager.ai_columns = {}
+                    table_manager.long_text_columns = {}
+
                     # 恢复AI列配置
                     ai_config = project_data.get("ai_config", {})
-                    ai_columns = ai_config.get("ai_columns", {})
-                    table_manager.ai_columns = ai_columns
+                    # 优先从prompt_templates恢复完整的AI列配置
+                    ai_columns = ai_config.get("prompt_templates", ai_config.get("ai_columns", {}))
+                    for col_name, config in ai_columns.items():
+                        if col_name in df.columns: # 确保列存在于数据框中
+                            table_manager.add_ai_column(col_name, config["prompt"], config.get("model", "gpt-4.1"), preserve_data=True)
+                    
+                    # 恢复长文本列配置
+                    long_text_config = project_data.get("long_text_config", {})
+                    long_text_columns = long_text_config.get("long_text_columns", {})
+                    for col_name, config in long_text_columns.items():
+                        if col_name in df.columns: # 确保列存在于数据框中
+                            table_manager.add_long_text_column(col_name, config["filename_field"], config["folder_path"], config.get("preview_length", 200))
+
+                    # 刷新长文本列内容（如果存在）
+                    for col_name in table_manager.long_text_columns:
+                        table_manager.refresh_long_text_column(col_name)
                     
                     # 恢复界面状态（可选）
                     ui_state = project_data.get("ui_state", {})
                     column_widths = ui_state.get("column_widths", {})
                     
-                    return True, f"项目加载成功: {len(df)}行 {len(df.columns)}列 (AI列: {len(ai_columns)})", column_widths
+                    return True, f"项目加载成功: {len(df)}行 {len(df.columns)}列 (AI列: {len(table_manager.ai_columns)}, 长文本列: {len(table_manager.long_text_columns)})", column_widths
             else:
                 # 空项目
                 table_manager.create_blank_table()
-                return True, "加载了空白项目"
+                return True, "加载了空白项目", {}
                 
         except FileNotFoundError:
-            return False, f"项目文件不存在: {file_path}"
+            return False, f"项目文件不存在: {file_path}", {}
         except json.JSONDecodeError:
-            return False, "项目文件格式错误，不是有效的JSON文件"
+            return False, "项目文件格式错误，不是有效的JSON文件", {}
         except Exception as e:
-            return False, f"加载项目失败: {str(e)}"
+            return False, f"加载项目失败: {str(e)}", {}
     
     def get_project_info(self, file_path):
         """

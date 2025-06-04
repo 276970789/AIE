@@ -100,7 +100,6 @@ htmlcov/
 
 # 测试文件夹
 tests/ 
-data/dataset.jsonl
-data/bench.jsonl
-论文/
+data/
+论文原文/
 docs/

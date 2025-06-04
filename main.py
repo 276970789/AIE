@@ -15,54 +15,76 @@ from ai_column_dialog import AIColumnDialog
 from project_manager import ProjectManager
 import os
 import time
+import threading
 
 class AIExcelApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("AI Excel 批量数据处理工具")
-        self.root.geometry("1400x900")
-        self.root.minsize(1000, 600)
+        self.root.title("AI Excel Tool v2.0")
+        self.root.geometry("1400x800")
+        self.table_manager = TableManager()
+        self.project_manager = ProjectManager()  
+        self.ai_processor = AIProcessor()
+        self.current_project_path = None
+        self.highlighted_column = None
+        self.last_sorted_column = None
+        self.sort_ascending = True
         
-        # 行高设置
+        # 初始化行高设置（必须在setup_styles之前）
         self.row_height_settings = {
-            'low': 28,
-            'medium': 36,
-            'high': 48
+            '紧凑': 22,
+            '标准': 25,
+            '宽松': 30,
+            '超宽松': 35
         }
-        self.current_row_height = 'low'  # 默认为低
+        self.current_row_height = '标准'
         
-        # 设置应用图标和样式
+        # 初始化筛选状态
+        self.filter_state = {
+            'active': False,
+            'column': None,
+            'selected_values': [],
+            'all_values': [],
+            'filtered_indices': []
+        }
+        
+        # 初始化排序状态
+        self.sort_state = {
+            'column': None,
+            'ascending': True,
+            'original_order': None
+        }
+        
+        # 添加撤销功能的历史记录
+        self.undo_history = []
+        self.max_undo_steps = 50  # 最大撤销步数
+        
+        # 创建样式
         self.setup_styles()
         
-        # 初始化管理器
-        self.table_manager = TableManager()
-        self.ai_processor = AIProcessor()
-        self.project_manager = ProjectManager()
-        
-        # 项目文件路径
-        self.current_project_path = None
-        
-        # 初始化选中状态
-        self.selected_row_index = None
-        
-        # 添加排序状态跟踪
-        self.sort_state = {
-            'column': None,      # 当前排序的列
-            'ascending': True,   # 排序方向 True=升序, False=降序
-            'original_order': None  # 原始行顺序（未排序状态）
-        }
-        
-        # 创建界面
+        # 创建菜单
         self.create_menu()
+        
+        # 创建工具栏
         self.create_toolbar()
+        
+        # 创建主界面
         self.create_main_frame()
+        
+        # 创建状态栏
         self.create_status_bar()
         
-        # 初始化
+        # 绑定事件
+        self.bind_events()
+        
+        # 显示欢迎页面
         self.show_welcome()
         
-        # 绑定窗口关闭事件
+        # 设置窗口关闭处理
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
+        
+        # 更新标题栏
+        self.update_title()
         
     def setup_styles(self):
         """设置界面样式"""
@@ -180,6 +202,16 @@ class AIExcelApp:
                        relief='solid',
                        padding=(8, 6))
         
+        # 为长文本列头定义特定样式
+        style.configure('LongText.Treeview.Heading',
+                       background='#f0f4f8',  # Example: A slightly different light blue/gray
+                       foreground='#000000',
+                       font=('Arial', 10, 'bold'),
+                       bordercolor='#cbd5e1',
+                       borderwidth=1,
+                       relief='solid',
+                       padding=(8, 6))
+        
         # 配置网格线和边框效果
         style.map('Modern.Treeview',
                  background=[('selected', '#dbeafe')],
@@ -238,6 +270,7 @@ class AIExcelApp:
         
         # 选择性导出
         export_menu.add_command(label="🎯 选择字段导出", command=self.show_export_selection, accelerator="Ctrl+E")
+        export_menu.add_command(label="🔍 条件筛选导出", command=self.show_conditional_export, accelerator="Ctrl+Alt+E")
         export_menu.add_command(label="⚡ 使用上次选择快速导出", command=self.quick_export_excel, accelerator="Ctrl+Shift+E")
         
         file_menu.add_separator()
@@ -252,6 +285,8 @@ class AIExcelApp:
         data_menu.add_cascade(label="➕ 插入", menu=insert_menu)
         insert_menu.add_command(label="← 左侧插入列", command=lambda: self.insert_column_dialog("left"))
         insert_menu.add_command(label="→ 右侧插入列", command=lambda: self.insert_column_dialog("right"))
+        insert_menu.add_separator()
+        insert_menu.add_command(label="📄 创建长文本列", command=self.create_long_text_column)
         insert_menu.add_separator()
         insert_menu.add_command(label="⬇️ 添加行", command=self.add_row)
         
@@ -268,6 +303,9 @@ class AIExcelApp:
         ai_submenu.add_command(label="🔗 测试AI连接", command=self.test_ai_connection)
         
         data_menu.add_separator()
+        data_menu.add_command(label="↶ 撤销", command=self.undo_action, accelerator="Ctrl+Z")
+        data_menu.add_separator()
+        data_menu.add_command(label="🔍 查找和替换", command=self.show_find_replace, accelerator="Ctrl+H")
         data_menu.add_command(label="🧹 清空所有数据", command=self.clear_data)
         
         # 视图菜单
@@ -280,6 +318,13 @@ class AIExcelApp:
         sort_submenu.add_command(label="🔄 重置排序", command=self.reset_sort)
         sort_submenu.add_separator()
         sort_submenu.add_command(label="💡 右键列标题选择排序方式", state='disabled')
+        
+        # 筛选操作
+        filter_submenu = tk.Menu(view_menu, tearoff=0)
+        view_menu.add_cascade(label="🔍 筛选", menu=filter_submenu)
+        filter_submenu.add_command(label="❌ 清除筛选", command=self.clear_filter)
+        filter_submenu.add_separator()
+        filter_submenu.add_command(label="💡 右键列标题选择筛选", state='disabled')
         
         view_menu.add_separator()
         
@@ -300,16 +345,18 @@ class AIExcelApp:
         help_menu.add_command(label="使用说明", command=self.show_help)
         help_menu.add_command(label="关于", command=self.show_about)
         
-        # 绑定快捷键
-        self.root.bind('<Control-n>', lambda e: self.create_blank_table())
-        self.root.bind('<Control-o>', lambda e: self.load_project())
-        self.root.bind('<Control-s>', lambda e: self.save_project())
-        self.root.bind('<Control-Shift-S>', lambda e: self.save_project_as())
-        self.root.bind('<Control-e>', lambda e: self.show_export_selection())
-        self.root.bind('<Control-Shift-E>', lambda e: self.quick_export_excel())
-        self.root.bind('<F5>', lambda e: self.process_all_ai())
-        self.root.bind('<F6>', lambda e: self.process_single_column())
-        self.root.bind('<F7>', lambda e: self.process_single_cell())
+        # 绑定快捷键 - 使用bind_all确保全局生效
+        self.root.bind_all('<Control-n>', lambda e: self.create_blank_table())
+        self.root.bind_all('<Control-o>', lambda e: self.load_project())
+        self.root.bind_all('<Control-s>', lambda e: self.save_project())
+        self.root.bind_all('<Control-Shift-S>', lambda e: self.save_project_as())
+        self.root.bind_all('<Control-e>', lambda e: self.show_export_selection())
+        self.root.bind_all('<Control-Alt-e>', lambda e: self.show_conditional_export())
+        self.root.bind_all('<Control-h>', lambda e: self.show_find_replace())
+        self.root.bind_all('<Control-Shift-E>', lambda e: self.quick_export_excel())
+        self.root.bind_all('<F5>', lambda e: self.process_all_ai())
+        self.root.bind_all('<F6>', lambda e: self.process_single_column())
+        self.root.bind_all('<F7>', lambda e: self.process_single_cell())
         
     def create_toolbar(self):
         """创建工具栏区域 - 现在用于预览面板"""
@@ -378,8 +425,12 @@ class AIExcelApp:
         table_inner_frame = tk.Frame(table_border_frame, bg='#ffffff')
         table_inner_frame.pack(fill=tk.BOTH, expand=True, padx=1, pady=1)
         
+        # 创建表格和滚动条的容器
+        table_scroll_frame = ttk.Frame(table_inner_frame)
+        table_scroll_frame.pack(fill=tk.BOTH, expand=True)
+        
         # 创建表格 - 使用现代化样式
-        self.tree = ttk.Treeview(table_inner_frame, show='headings', style='Modern.Treeview')
+        self.tree = ttk.Treeview(table_scroll_frame, show='headings', style='Modern.Treeview')
         self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         
         # 配置表格的网格线和边框
@@ -392,7 +443,7 @@ class AIExcelApp:
         # self.tree.configure(relief='solid', borderwidth=1)  # Treeview不支持这些选项
         
         # 现代化垂直滚动条
-        v_scrollbar = ttk.Scrollbar(table_inner_frame, orient=tk.VERTICAL, command=self.tree.yview)
+        v_scrollbar = ttk.Scrollbar(table_scroll_frame, orient=tk.VERTICAL, command=self.tree.yview)
         v_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         self.tree.configure(yscrollcommand=v_scrollbar.set)
         
@@ -449,6 +500,35 @@ class AIExcelApp:
         preview_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         self.preview_text.configure(yscrollcommand=preview_scrollbar.set)
         
+        # AI Prompt 预览区域
+        self.prompt_preview_frame = ttk.LabelFrame(content_frame, text="💬 AI请求Prompt", 
+                                                   style='Modern.TLabelframe', padding="10")
+        self.prompt_preview_frame.pack(fill=tk.BOTH, expand=True, pady=(10, 0))
+        
+        # Prompt文本框和开关
+        prompt_text_container = ttk.Frame(self.prompt_preview_frame)
+        prompt_text_container.pack(fill=tk.BOTH, expand=True)
+        
+        self.prompt_text = tk.Text(prompt_text_container, wrap=tk.WORD, height=3, width=60,
+                                  font=('Arial', 10), relief='solid', borderwidth=1)
+        self.prompt_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        
+        prompt_scrollbar = ttk.Scrollbar(prompt_text_container, orient=tk.VERTICAL, 
+                                         command=self.prompt_text.yview)
+        prompt_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        self.prompt_text.configure(yscrollcommand=prompt_scrollbar.set)
+        
+        # 一键开关 - 用于显示/隐藏完整Prompt
+        self.show_full_prompt_var = tk.BooleanVar(value=False)
+        self.show_full_prompt_checkbox = ttk.Checkbutton(self.prompt_preview_frame, 
+                                                        text="显示完整Prompt", 
+                                                        variable=self.show_full_prompt_var, 
+                                                        command=self.toggle_full_prompt_display)
+        self.show_full_prompt_checkbox.pack(anchor=tk.E, pady=(5,0))
+        
+        # 初始状态隐藏Prompt预览
+        self.prompt_preview_frame.pack_forget()
+        
         # 操作按钮 - 垂直排列在右侧
         button_frame = ttk.Frame(self.preview_panel, style='Modern.TFrame')
         button_frame.pack(side=tk.RIGHT, fill=tk.Y)
@@ -482,17 +562,51 @@ class AIExcelApp:
             self.cell_info_label.config(text=f"{col_name} [第{row_index+1}行]")
             
             # 获取列类型信息
-            ai_columns = self.table_manager.get_ai_columns()
-            if col_name in ai_columns:
+            if self.table_manager.is_long_text_column(col_name):
+                self.cell_type_label.config(text="长文本列", foreground="green") # Example color
+            elif col_name in self.table_manager.get_ai_columns(): # Check AI after Long Text
+                ai_columns = self.table_manager.get_ai_columns()
                 config = ai_columns[col_name]
                 if isinstance(config, dict):
                     model = config.get("model", "gpt-4.1")
                     self.cell_type_label.config(text=f"AI列 ({model})", foreground="blue")
+                    
+                    # 显示Prompt预览区域
+                    self.prompt_preview_frame.pack(fill=tk.BOTH, expand=True, pady=(10, 0))
+                    
+                    # 构建并显示完整Prompt
+                    full_prompt = self.ai_processor.build_full_prompt(row_index, col_name, self.table_manager)
+                    self.prompt_text.config(state='normal')
+                    self.prompt_text.delete("1.0", tk.END)
+                    self.prompt_text.insert("1.0", full_prompt)
+                    self.prompt_text.config(state='disabled')
+                    
+                    # 重置开关状态，默认不显示完整prompt，但框显示
+                    self.show_full_prompt_var.set(False)
+                    self.toggle_full_prompt_display() # 根据初始值设置显示状态
+                    self.show_full_prompt_checkbox.config(state='normal')
+
                 else:
                     self.cell_type_label.config(text="AI列 (gpt-4.1)", foreground="blue")
+                    # 如果是旧格式，也显示Prompt预览，但只显示prompt template
+                    self.prompt_preview_frame.pack(fill=tk.BOTH, expand=True, pady=(10, 0))
+                    self.prompt_text.config(state='normal')
+                    self.prompt_text.delete("1.0", tk.END)
+                    self.prompt_text.insert("1.0", self.table_manager.get_ai_column_prompt(col_name))
+                    self.prompt_text.config(state='disabled')
+                    self.show_full_prompt_var.set(False)
+                    self.toggle_full_prompt_display()
+                    self.show_full_prompt_checkbox.config(state='normal')
+
             else:
                 self.cell_type_label.config(text="普通列", foreground="gray")
-            
+                # 隐藏Prompt预览区域
+                self.prompt_preview_frame.pack_forget()
+                self.show_full_prompt_checkbox.config(state='disabled')
+                self.prompt_text.config(state='normal')
+                self.prompt_text.delete("1.0", tk.END)
+                self.prompt_text.config(state='disabled')
+
             # 更新内容显示
             self.preview_text.config(state='normal')
             self.preview_text.delete("1.0", tk.END)
@@ -570,6 +684,7 @@ class AIExcelApp:
                     
                     # 刷新显示
                     self.update_table_display()
+                    self.update_title()  # 更新标题栏
                     self.update_content_preview(row_index, col_name, "")
                     self.update_status(f"已清空 {col_name} [第{row_index+1}行]", "success")
         
@@ -586,6 +701,12 @@ class AIExcelApp:
         self.tree.bind("<Button-1>", self.on_column_drag_start, add='+')
         self.tree.bind("<B1-Motion>", self.on_column_drag_motion)
         self.tree.bind("<ButtonRelease-1>", self.on_column_drag_end)
+        
+        # 全局快捷键绑定
+        self.root.bind_all("<Control-s>", lambda e: self.save_project())
+        self.root.bind_all("<Control-S>", lambda e: self.save_project())
+        self.root.bind_all("<Control-z>", lambda e: self.undo_action())
+        self.root.bind_all("<Control-Z>", lambda e: self.undo_action())
         
         # 添加选中状态追踪
         self.selection_info = {
@@ -627,7 +748,7 @@ class AIExcelApp:
         title_frame = ttk.Frame(welcome_container, style='Modern.TFrame')
         title_frame.pack(pady=(0, 30))
         
-        ttk.Label(title_frame, text="AI Excel 批量数据处理工具", 
+        ttk.Label(title_frame, text="AI批量数据处理工具", 
                  style='Title.TLabel', font=('Arial', 18, 'bold')).pack(pady=(8, 0))
         
         # 操作按钮区域
@@ -677,16 +798,19 @@ class AIExcelApp:
         
     def create_blank_table(self):
         """创建空白表格"""
-        # 创建带有示例列的空白表格
+        # 检查未保存的更改
+        if not self.check_unsaved_changes_before_action("创建新的空白表格"):
+            return
+            
         success = self.table_manager.create_blank_table()
         if success:
-            # 清除项目文件路径
+            # 清除当前项目路径
             self.current_project_path = None
             self.hide_welcome()
             self.update_table_display()
-            self.info_label.config(text="已创建空白表格")
+            self.info_label.config(text="📄 新建表格")
             self.update_status("已创建空白表格", "success")
-            print("空白表格创建成功，数据行数：", len(self.table_manager.get_dataframe()))
+            self.update_title()  # 更新标题栏
         else:
             messagebox.showerror("错误", "创建空白表格失败")
             
@@ -772,7 +896,15 @@ class AIExcelApp:
                 
                 # AI处理操作
                 context_menu.add_command(
-                    label="⚡ AI处理整列",
+                    label="📊 查看处理进度",
+                    command=lambda: self.show_ai_column_progress(col_name)
+                )
+                context_menu.add_command(
+                    label="⚡ AI处理整列(新版)",
+                    command=lambda: self.process_ai_column_concurrent(col_name)
+                )
+                context_menu.add_command(
+                    label="⚡ AI处理整列(旧版)",
                     command=lambda: self.process_entire_column(col_name)
                 )
                 context_menu.add_separator()
@@ -780,6 +912,19 @@ class AIExcelApp:
                 context_menu.add_command(
                     label="📝 转换为普通列",
                     command=lambda: self.convert_to_normal_column(col_name)
+                )
+            
+            context_menu.add_separator()
+            
+            # 筛选操作
+            context_menu.add_command(
+                label="🔍 筛选数据",
+                command=lambda: self.show_filter_dialog(col_name)
+            )
+            if self.filter_state['active'] and self.filter_state['column'] == col_name:
+                context_menu.add_command(
+                    label="❌ 清除筛选",
+                    command=self.clear_filter
                 )
             
             context_menu.add_separator()
@@ -945,6 +1090,7 @@ class AIExcelApp:
             success = self.table_manager.rename_column(old_name, new_name)
             if success:
                 self.update_table_display()
+                self.update_title()  # 更新标题栏
                 self.update_status(f"列名已更改: {old_name} → {new_name}", "success")
                 messagebox.showinfo("成功", f"列名已更改为: {new_name}")
                 dialog.destroy()
@@ -973,10 +1119,20 @@ class AIExcelApp:
         if isinstance(config, dict):
             current_prompt = config.get("prompt", "")
             current_model = config.get("model", "gpt-4.1")
+            current_params = config.get("processing_params", {
+                'max_workers': 3,
+                'request_delay': 0.5,
+                'max_retries': 2
+            })
         else:
             # 向后兼容旧格式
             current_prompt = config
             current_model = "gpt-4.1"
+            current_params = {
+                'max_workers': 3,
+                'request_delay': 0.5,
+                'max_retries': 2
+            }
         
         # 使用 AI 列对话框的相似设计，但预填充现有数据
         from ai_column_dialog import AIColumnDialog
@@ -984,7 +1140,7 @@ class AIExcelApp:
         # 创建对话框
         dialog = tk.Toplevel(self.root)
         dialog.title(f"编辑AI列配置 - {col_name}")
-        dialog.geometry("700x600")
+        dialog.geometry("700x700")  # 增加高度以容纳处理参数
         dialog.resizable(True, True)
         dialog.transient(self.root)
         dialog.grab_set()
@@ -992,8 +1148,8 @@ class AIExcelApp:
         # 居中显示
         dialog.update_idletasks()
         x = (dialog.winfo_screenwidth() // 2) - (700 // 2)
-        y = (dialog.winfo_screenheight() // 2) - (600 // 2)
-        dialog.geometry(f"700x600+{x}+{y}")
+        y = (dialog.winfo_screenheight() // 2) - (700 // 2)
+        dialog.geometry(f"700x700+{x}+{y}")
         
         # 主框架
         main_frame = ttk.Frame(dialog, padding="10")
@@ -1018,6 +1174,46 @@ class AIExcelApp:
         # 模型说明
         ttk.Label(model_config_frame, text="  (gpt-4.1: 快速响应 | o1: 深度推理)", 
                  foreground="gray", font=('Arial', 8)).pack(side=tk.LEFT, padx=(10, 0))
+        
+        # 处理参数配置框架
+        params_frame = ttk.LabelFrame(main_frame, text="处理参数配置", padding="10")
+        params_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        # 并发数设置
+        concurrent_frame = ttk.Frame(params_frame)
+        concurrent_frame.pack(fill=tk.X, pady=(0, 5))
+        
+        ttk.Label(concurrent_frame, text="并发数:").pack(side=tk.LEFT, padx=(0, 10))
+        max_workers_var = tk.IntVar(value=current_params.get('max_workers', 3))
+        max_workers_spinbox = ttk.Spinbox(concurrent_frame, from_=1, to=10, 
+                                         textvariable=max_workers_var, width=5)
+        max_workers_spinbox.pack(side=tk.LEFT)
+        ttk.Label(concurrent_frame, text="  (同时处理的任务数，建议1-5)", 
+                 foreground="gray", font=('Arial', 8)).pack(side=tk.LEFT, padx=(5, 0))
+        
+        # 请求延迟设置
+        delay_frame = ttk.Frame(params_frame)
+        delay_frame.pack(fill=tk.X, pady=(0, 5))
+        
+        ttk.Label(delay_frame, text="请求延迟:").pack(side=tk.LEFT, padx=(0, 10))
+        request_delay_var = tk.DoubleVar(value=current_params.get('request_delay', 0.5))
+        delay_spinbox = ttk.Spinbox(delay_frame, from_=0.1, to=5.0, increment=0.1,
+                                   textvariable=request_delay_var, width=5)
+        delay_spinbox.pack(side=tk.LEFT)
+        ttk.Label(delay_frame, text="秒  (避免API限流，建议0.3-1.0)", 
+                 foreground="gray", font=('Arial', 8)).pack(side=tk.LEFT, padx=(5, 0))
+        
+        # 重试次数设置
+        retry_frame = ttk.Frame(params_frame)
+        retry_frame.pack(fill=tk.X, pady=(0, 5))
+        
+        ttk.Label(retry_frame, text="重试次数:").pack(side=tk.LEFT, padx=(0, 10))
+        max_retries_var = tk.IntVar(value=current_params.get('max_retries', 2))
+        retry_spinbox = ttk.Spinbox(retry_frame, from_=0, to=5, 
+                                   textvariable=max_retries_var, width=5)
+        retry_spinbox.pack(side=tk.LEFT)
+        ttk.Label(retry_frame, text="  (API失败时的重试次数，建议1-3)", 
+                 foreground="gray", font=('Arial', 8)).pack(side=tk.LEFT, padx=(5, 0))
         
         # Prompt模板输入区域
         prompt_frame = ttk.LabelFrame(main_frame, text="AI Prompt模板", padding="10")
@@ -1087,7 +1283,7 @@ class AIExcelApp:
             tip_label.pack(anchor=tk.W, pady=(2, 0))
         
         # Prompt文本框
-        prompt_text = tk.Text(prompt_frame, height=12, wrap=tk.WORD, width=80)
+        prompt_text = tk.Text(prompt_frame, height=8, wrap=tk.WORD, width=80)
         prompt_text.pack(fill=tk.BOTH, expand=True)
         prompt_text.insert("1.0", current_prompt)
         prompt_text.focus()
@@ -1114,12 +1310,20 @@ class AIExcelApp:
                                            f"提示词模板可能有问题：{message}\n\n是否仍要保存？")
                 if not result:
                     return
+            
+            # 获取处理参数
+            processing_params = {
+                'max_workers': max_workers_var.get(),
+                'request_delay': request_delay_var.get(),
+                'max_retries': max_retries_var.get()
+            }
                     
-            # 更新AI列配置（包含模型信息）
+            # 更新AI列配置（包含模型信息和处理参数）
             new_model = model_var.get()
-            self.table_manager.update_ai_column_config(col_name, new_prompt, new_model)
+            self.table_manager.update_ai_column_config(col_name, new_prompt, new_model, processing_params)
+            self.update_title()  # 更新标题栏
             self.update_status(f"已更新AI列配置: {col_name} (模型: {new_model})", "success")
-            messagebox.showinfo("成功", f"AI列配置已更新\n模型: {new_model}")
+            messagebox.showinfo("成功", f"AI列配置已更新\n模型: {new_model}\n并发数: {processing_params['max_workers']}")
             dialog.destroy()
                 
         def on_cancel():
@@ -1142,6 +1346,7 @@ class AIExcelApp:
         if result:
             self.table_manager.convert_to_normal_column(col_name)
             self.update_table_display()
+            self.update_title()  # 更新标题栏
             self.update_status(f"已转换为普通列: {col_name}", "success")
             messagebox.showinfo("成功", f"列 '{col_name}' 已转换为普通列")
     
@@ -1160,6 +1365,7 @@ class AIExcelApp:
             success = self.table_manager.delete_column(column_name)
             if success:
                 self.update_table_display()
+                self.update_title()  # 更新标题栏
                 self.update_status(f"已删除列: {column_name}", "success")
                 messagebox.showinfo("成功", f"列 '{column_name}' 已删除")
             else:
@@ -1181,10 +1387,14 @@ class AIExcelApp:
             if isinstance(config, dict):
                 prompt = config.get("prompt", "")
                 model = config.get("model", "gpt-4.1")
+                output_mode = config.get("output_mode", "single")
+                output_fields = config.get("output_fields", [])
             else:
                 # 向后兼容
                 prompt = config
                 model = "gpt-4.1"
+                output_mode = "single"
+                output_fields = []
             
             # 处理单个单元格
             try:
@@ -1193,18 +1403,322 @@ class AIExcelApp:
                     row_index,
                     col_name,
                     prompt,
-                    model
+                    model,
+                    self.table_manager,
+                    output_fields if output_mode == "multi" else None
                 )
                 
                 if success:
                     self.update_table_display()
-                    self.update_status(f"单元格 {col_name}[{row_index+1}] 处理完成", "success")
+                    if output_mode == "multi" and isinstance(result, dict):
+                        self.update_status(f"单元格 {col_name}[{row_index+1}] 多字段处理完成 (提取了 {len(result)} 个字段)", "success")
+                    else:
+                        self.update_status(f"单元格 {col_name}[{row_index+1}] 处理完成", "success")
                 else:
-                    self.update_status("单元格处理失败", "error")
+                    # 如果是JSON解析失败，提供重试选项
+                    if "JSON解析失败" in str(result) and output_mode == "multi":
+                        retry_result = messagebox.askyesnocancel("解析失败", 
+                                                               f"JSON解析失败: {result}\n\n"
+                                                               f"是否手动重新解析当前响应？\n"
+                                                               f"点击'是'重新解析，'否'跳过，'取消'查看原始响应")
+                        if retry_result is True:  # 重新解析
+                            self.retry_parse_cell(row_index, col_name, output_fields)
+                        elif retry_result is False:  # 跳过
+                            pass
+                        else:  # 查看原始响应
+                            self.show_original_response(row_index, col_name)
+                    else:
+                        self.update_status("单元格处理失败", "error")
                     
             except Exception as e:
                 messagebox.showerror("错误", f"处理单元格时出错: {str(e)}")
                 self.update_status("单元格处理失败", "error")
+    
+    def retry_parse_cell(self, row_index, col_name, expected_fields):
+        """重试解析单个单元格的JSON响应"""
+        try:
+            success, result = self.ai_processor.retry_parse_single_cell(
+                self.table_manager.get_dataframe(),
+                row_index,
+                col_name,
+                expected_fields
+            )
+            
+            if success:
+                self.update_table_display()
+                self.update_status(f"重新解析成功: {col_name}[{row_index+1}]", "success")
+                messagebox.showinfo("成功", f"重新解析成功！\n{result}")
+            else:
+                self.update_status("重新解析失败", "error")
+                messagebox.showerror("失败", f"重新解析失败: {result}")
+                
+        except Exception as e:
+            messagebox.showerror("错误", f"重新解析时出错: {str(e)}")
+            
+    def show_original_response(self, row_index, col_name):
+        """显示原始AI响应"""
+        try:
+            df = self.table_manager.get_dataframe()
+            current_value = str(df.loc[row_index, col_name])
+            
+            # 提取原始响应（去掉解析错误标记）
+            if "[解析错误:" in current_value:
+                original_response = current_value.split("\n\n[解析错误:")[0]
+            else:
+                original_response = current_value
+                
+            # 创建对话框显示原始响应
+            dialog = tk.Toplevel(self.root)
+            dialog.title(f"原始AI响应 - {col_name}[{row_index+1}]")
+            dialog.geometry("600x400")
+            dialog.transient(self.root)
+            dialog.grab_set()
+            
+            # 居中显示
+            dialog.update_idletasks()
+            x = (dialog.winfo_screenwidth() // 2) - (300)
+            y = (dialog.winfo_screenheight() // 2) - (200)
+            dialog.geometry(f"600x400+{x}+{y}")
+            
+            # 文本框显示原始响应
+            text_frame = ttk.Frame(dialog)
+            text_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+            
+            text_widget = tk.Text(text_frame, wrap=tk.WORD, width=70, height=20)
+            text_widget.pack(fill=tk.BOTH, expand=True, side=tk.LEFT)
+            
+            scrollbar = ttk.Scrollbar(text_frame, orient=tk.VERTICAL, command=text_widget.yview)
+            scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+            text_widget.configure(yscrollcommand=scrollbar.set)
+            
+            text_widget.insert("1.0", original_response)
+            text_widget.config(state=tk.DISABLED)
+            
+            # 按钮框架
+            button_frame = ttk.Frame(dialog)
+            button_frame.pack(pady=10)
+            
+            ttk.Button(button_frame, text="复制内容", 
+                      command=lambda: self.copy_to_clipboard(original_response)).pack(side=tk.LEFT, padx=5)
+            ttk.Button(button_frame, text="关闭", command=dialog.destroy).pack(side=tk.LEFT, padx=5)
+            
+        except Exception as e:
+            messagebox.showerror("错误", f"显示原始响应时出错: {str(e)}")
+            
+    def copy_to_clipboard(self, text):
+        """复制文本到剪贴板"""
+        self.root.clipboard_clear()
+        self.root.clipboard_append(text)
+        messagebox.showinfo("复制成功", "内容已复制到剪贴板")
+        
+    def show_filter_dialog(self, column_name):
+        """显示筛选对话框"""
+        df = self.table_manager.get_dataframe()
+        if df is None or column_name not in df.columns:
+            messagebox.showwarning("警告", "无法筛选此列")
+            return
+            
+        # 获取列的所有唯一值
+        unique_values = df[column_name].astype(str).unique()
+        unique_values = sorted([v for v in unique_values if v.strip() != ''])  # 排序并去除空值
+        
+        if not unique_values:
+            messagebox.showinfo("提示", "此列没有可筛选的数据")
+            return
+            
+        # 创建筛选对话框
+        dialog = tk.Toplevel(self.root)
+        dialog.title(f"筛选 - {column_name}")
+        dialog.geometry("450x600")
+        dialog.resizable(True, True)
+        dialog.transient(self.root)
+        dialog.grab_set()
+        
+        # 居中显示
+        dialog.update_idletasks()
+        x = (dialog.winfo_screenwidth() // 2) - (225)
+        y = (dialog.winfo_screenheight() // 2) - (300)
+        dialog.geometry(f"450x600+{x}+{y}")
+        
+        # 主框架
+        main_frame = ttk.Frame(dialog, padding="15")
+        main_frame.pack(fill=tk.BOTH, expand=True)
+        
+        # 标题
+        title_label = ttk.Label(main_frame, text=f"筛选列: {column_name}", 
+                               font=('Microsoft YaHei UI', 14, 'bold'))
+        title_label.pack(pady=(0, 15))
+        
+        # 统计信息
+        info_frame = ttk.Frame(main_frame)
+        info_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        total_count = len(df)
+        unique_count = len(unique_values)
+        ttk.Label(info_frame, text=f"总行数: {total_count} | 唯一值: {unique_count}",
+                 foreground="gray").pack()
+        
+        # 操作按钮框架
+        control_frame = ttk.Frame(main_frame)
+        control_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        ttk.Button(control_frame, text="全选", command=lambda: self.toggle_all_filter_items(True, checkboxes)).pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Button(control_frame, text="全不选", command=lambda: self.toggle_all_filter_items(False, checkboxes)).pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Button(control_frame, text="反选", command=lambda: self.toggle_filter_selection(checkboxes)).pack(side=tk.LEFT)
+        
+        # 搜索框
+        search_frame = ttk.Frame(main_frame)
+        search_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        ttk.Label(search_frame, text="搜索:").pack(side=tk.LEFT, padx=(0, 5))
+        search_var = tk.StringVar()
+        search_entry = ttk.Entry(search_frame, textvariable=search_var, width=30)
+        search_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        
+        # 值列表框架
+        list_frame = ttk.LabelFrame(main_frame, text="选择要显示的值", padding="10")
+        list_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 15))
+        
+        # 滚动框架
+        canvas = tk.Canvas(list_frame)
+        scrollbar = ttk.Scrollbar(list_frame, orient="vertical", command=canvas.yview)
+        scrollable_frame = ttk.Frame(canvas)
+        
+        scrollable_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
+        
+        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+        
+        # 创建复选框
+        checkboxes = {}
+        checkbox_vars = {}
+        
+        # 如果当前列已有筛选，使用之前的选择
+        if self.filter_state['active'] and self.filter_state['column'] == column_name:
+            selected_values = set(self.filter_state['selected_values'])
+        else:
+            selected_values = set(unique_values)  # 默认全选
+        
+        for value in unique_values:
+            var = tk.BooleanVar(value=value in selected_values)
+            checkbox_vars[value] = var
+            
+            frame = ttk.Frame(scrollable_frame)
+            frame.pack(fill=tk.X, pady=1)
+            
+            checkbox = ttk.Checkbutton(frame, text=str(value), variable=var)
+            checkbox.pack(side=tk.LEFT)
+            checkboxes[value] = (checkbox, var)
+            
+            # 显示该值的行数
+            count = len(df[df[column_name].astype(str) == str(value)])
+            count_label = ttk.Label(frame, text=f"({count})", foreground="gray")
+            count_label.pack(side=tk.RIGHT)
+        
+        # 搜索功能
+        def filter_checkboxes():
+            search_text = search_var.get().lower()
+            for value, (checkbox, var) in checkboxes.items():
+                if search_text in str(value).lower():
+                    checkbox.pack(side=tk.LEFT)
+                    checkbox.master.pack(fill=tk.X, pady=1)
+                else:
+                    checkbox.master.pack_forget()
+        
+        search_var.trace('w', lambda *args: filter_checkboxes())
+        
+        # 按钮框架
+        button_frame = ttk.Frame(main_frame)
+        button_frame.pack(fill=tk.X)
+        
+        def apply_filter():
+            selected = [value for value, (_, var) in checkboxes.items() if var.get()]
+            
+            if not selected:
+                messagebox.showwarning("警告", "请至少选择一个值")
+                return
+                
+            # 应用筛选
+            self.apply_filter(column_name, selected)
+            dialog.destroy()
+            
+        def cancel_filter():
+            dialog.destroy()
+            
+        ttk.Button(button_frame, text="应用筛选", command=apply_filter).pack(side=tk.RIGHT, padx=(5, 0))
+        ttk.Button(button_frame, text="取消", command=cancel_filter).pack(side=tk.RIGHT)
+        
+        # 绑定快捷键
+        dialog.bind('<Return>', lambda e: apply_filter())
+        dialog.bind('<Escape>', lambda e: cancel_filter())
+        
+    def toggle_all_filter_items(self, select_all, checkboxes):
+        """全选/全不选筛选项"""
+        for _, (_, var) in checkboxes.items():
+            var.set(select_all)
+            
+    def toggle_filter_selection(self, checkboxes):
+        """反选筛选项"""
+        for _, (_, var) in checkboxes.items():
+            var.set(not var.get())
+            
+    def apply_filter(self, column_name, selected_values):
+        """应用筛选"""
+        df = self.table_manager.get_dataframe()
+        if df is None or column_name not in df.columns:
+            return
+            
+        # 找到匹配的行索引
+        mask = df[column_name].astype(str).isin(selected_values)
+        filtered_indices = df[mask].index.tolist()
+        
+        # 更新筛选状态
+        self.filter_state = {
+            'active': True,
+            'column': column_name,
+            'selected_values': selected_values,
+            'all_values': df[column_name].astype(str).unique().tolist(),
+            'filtered_indices': filtered_indices
+        }
+        
+        # 更新显示
+        self.update_table_display()
+        
+        # 更新状态栏
+        total_count = len(df)
+        filtered_count = len(filtered_indices)
+        self.update_status(f"已筛选 {column_name}: 显示 {filtered_count}/{total_count} 行", "success")
+        
+    def clear_filter(self):
+        """清除筛选"""
+        self.filter_state = {
+            'active': False,
+            'column': None,
+            'selected_values': [],
+            'all_values': [],
+            'filtered_indices': []
+        }
+        
+        # 更新显示
+        self.update_table_display()
+        self.update_status("已清除筛选", "success")
+        
+    def get_filtered_dataframe(self):
+        """获取筛选后的数据框"""
+        df = self.table_manager.get_dataframe()
+        if df is None:
+            return None
+            
+        if self.filter_state['active'] and self.filter_state['filtered_indices']:
+            return df.iloc[self.filter_state['filtered_indices']].reset_index(drop=True)
+        else:
+            return df
     
     def process_entire_column(self, col_name):
         """处理整个AI列"""
@@ -1244,7 +1758,7 @@ class AIExcelApp:
             for row_index in range(len(df)):
                 try:
                     success, result = self.ai_processor.process_single_cell(
-                        df, row_index, col_name, prompt_template, model
+                        df, row_index, col_name, prompt_template, model, self.table_manager
                     )
                     
                     if success:
@@ -1364,12 +1878,20 @@ class AIExcelApp:
         def save_changes():
             try:
                 new_value = text_widget.get("1.0", tk.END).strip()
+                
+                # 保存状态用于撤销
+                self.save_state(f"编辑单元格 {col_name}[第{row_index+1}行]")
+                
                 # 更新数据框
                 df = self.table_manager.get_dataframe()
                 df.iloc[row_index, df.columns.get_loc(col_name)] = new_value
                 
+                # 标记有更改
+                self.table_manager.changes_made = True
+                
                 # 刷新表格显示
                 self.update_table_display()
+                self.update_title()  # 更新标题栏
                 
                 # 更新预览面板
                 if self.current_preview_cell and self.current_preview_cell['row_index'] == row_index and self.current_preview_cell['col_name'] == col_name:
@@ -1437,13 +1959,11 @@ class AIExcelApp:
                     self.current_project_path = file_path
                     filename = os.path.basename(file_path)
                     self.info_label.config(text=f"📁 {filename}")
-                    self.update_status(f"项目已保存: {filename}", "success")
-                    
-                    # 如果是原文件保存，显示简单提示
-                    if file_path == self.current_project_path:
-                        messagebox.showinfo("保存成功", f"项目已保存到: {filename}")
-                    else:
-                        messagebox.showinfo("成功", message)
+                    self.update_status(f"项目已保存到: {filename}", "success")
+                    messagebox.showinfo("成功", f"项目已保存到: {filename}")
+                    self.table_manager.reset_changes_flag() # 保存成功后重置更改标志
+                    self.update_title()  # 更新标题栏，移除未保存标记
+                    return True, "项目保存成功"
                 else:
                     self.update_status("保存失败", "error")
                     messagebox.showerror("错误", message)
@@ -1484,6 +2004,8 @@ class AIExcelApp:
                     self.info_label.config(text=f"📁 {filename}")
                     self.update_status(f"项目已另存为: {filename}", "success")
                     messagebox.showinfo("成功", f"项目已另存为: {filename}")
+                    self.table_manager.reset_changes_flag() # 另存为成功后重置更改标志
+                    self.update_title()  # 更新标题栏，移除未保存标记
                 else:
                     self.update_status("另存为失败", "error")
                     messagebox.showerror("错误", message)
@@ -1494,6 +2016,10 @@ class AIExcelApp:
 
     def load_project(self):
         """加载项目文件"""
+        # 检查未保存的更改
+        if not self.check_unsaved_changes_before_action("加载新项目"):
+            return
+            
         file_path = filedialog.askopenfilename(
             title="选择项目文件",
             filetypes=[
@@ -1520,6 +2046,8 @@ class AIExcelApp:
                     self.info_label.config(text=f"📁 {filename}")
                     self.update_status(f"项目已加载: {filename}", "success")
                     messagebox.showinfo("成功", message)
+                    self.table_manager.reset_changes_flag() # 加载成功后重置更改标志
+                    self.update_title()  # 更新标题栏
                 else:
                     self.update_status("加载失败", "error")
                     messagebox.showerror("错误", message)
@@ -1530,6 +2058,10 @@ class AIExcelApp:
 
     def import_data_file(self):
         """导入文件"""
+        # 检查未保存的更改
+        if not self.check_unsaved_changes_before_action("导入新数据文件"):
+            return
+            
         file_path = filedialog.askopenfilename(
             title="选择数据文件",
             filetypes=[
@@ -1554,6 +2086,7 @@ class AIExcelApp:
                     filename = os.path.basename(file_path)
                     self.info_label.config(text=f"📁 {filename}")
                     self.update_status(f"已导入: {filename}", "success")
+                    self.update_title()  # 更新标题栏
                 else:
                     messagebox.showerror("错误", "文件导入失败")
                     self.update_status("导入失败", "error")
@@ -1570,8 +2103,14 @@ class AIExcelApp:
         for item in self.tree.get_children():
             self.tree.delete(item)
             
-        df = self.table_manager.get_dataframe()
-        if df is not None:
+        # 获取原始数据框和筛选后的数据框
+        original_df = self.table_manager.get_dataframe()
+        if original_df is not None:
+            # 获取要显示的数据（筛选后的）
+            if self.filter_state['active'] and self.filter_state['filtered_indices']:
+                df = original_df.iloc[self.filter_state['filtered_indices']].reset_index(drop=True)
+            else:
+                df = original_df
             print(f"数据框大小: {df.shape}")
             print(f"列名: {list(df.columns)}")
             
@@ -1582,14 +2121,27 @@ class AIExcelApp:
             
             # 设置列标题和宽度，并添加边框效果
             ai_columns = self.table_manager.get_ai_columns()
+            long_text_columns = self.table_manager.get_long_text_columns()
+            print(f"DEBUG: main.py - update_table_display - AI Columns: {ai_columns}") # Debug print
+            print(f"DEBUG: main.py - update_table_display - Long Text Columns: {long_text_columns}") # Debug print
             for i, col in enumerate(columns):
                 display_col_name = col
+                heading_style = 'Normal.Treeview.Heading'  # Default style
+                
                 if col in ai_columns:
-                    display_col_name = f"🤖 {col}" # AI列添加机器人图标
+                    display_col_name = f"★ {col} ★"  # AI列添加星号
+                    heading_style = 'AI.Treeview.Heading'
+                elif col in long_text_columns:
+                    display_col_name = f"📄 {col}"  # 长文本列添加文档图标
+                    heading_style = 'LongText.Treeview.Heading'
                 
                 # 添加排序指示符（如果当前正在排序这一列）
                 sort_indicator = self.get_sort_indicator(col)
                 display_col_name += sort_indicator
+                
+                # 添加筛选指示符（如果当前正在筛选这一列）
+                if self.filter_state['active'] and self.filter_state['column'] == col:
+                    display_col_name += " 🔍"
                     
                 self.tree.heading(col, text=display_col_name,
                                  anchor='w')  # 左对齐，不绑定点击事件
@@ -1643,7 +2195,15 @@ class AIExcelApp:
             row_count = len(df)
             col_count = len(df.columns)
             ai_count = len(self.table_manager.get_ai_columns())
-            self.table_frame.config(text=f"📊 数据表格 - {row_count}行 {col_count}列 (AI列: {ai_count})")
+            
+            # 构建表格标题，包含筛选状态
+            title = f"📊 数据表格 - {row_count}行 {col_count}列 (AI列: {ai_count})"
+            if self.filter_state['active']:
+                original_count = len(original_df)
+                filter_column = self.filter_state['column']
+                title += f" | 🔍 已筛选 {filter_column}: {row_count}/{original_count} 行"
+            
+            self.table_frame.config(text=title)
             
             # 恢复列高亮效果
             if hasattr(self, 'highlighted_column') and self.highlighted_column is not None:
@@ -1666,48 +2226,203 @@ class AIExcelApp:
         result = dialog.show()
         
         if result:
-            if len(result) == 4:  # 新格式：包含模型信息
-                column_name, prompt_template, is_ai_column, ai_model = result
-            else:  # 向后兼容旧格式
-                column_name, prompt_template, is_ai_column = result
-                ai_model = "gpt-4.1"
-                
-            if is_ai_column:
-                self.table_manager.add_ai_column(column_name, prompt_template, ai_model)
-                self.update_status(f"已添加AI列: {column_name} (模型: {ai_model})", "success")
-            else:
-                self.table_manager.add_normal_column(column_name)
-                self.update_status(f"已添加列: {column_name}", "success")
-                
-            self.update_table_display()
+            column_name = result['column_name']
+            prompt_template = result['prompt']
+            ai_model = result['model']
+            processing_params = result['processing_params']
+            output_mode = result.get('output_mode', 'single')
+            output_fields = result.get('output_fields', [])
             
-    def create_normal_column(self):
-        """新建普通列"""
+            # 检查列名冲突（对话框已经做了验证，这里做最后检查）
+            existing_columns = self.table_manager.get_column_names()
+            if column_name in existing_columns:
+                messagebox.showerror("错误", f"列名 '{column_name}' 已存在")
+                return
+
+            # 保存状态用于撤销
+            self.save_state(f"创建AI列: {column_name}")
+            
+            self.table_manager.add_ai_column(column_name, prompt_template, ai_model, processing_params, output_mode, output_fields)
+            
+            if output_mode == "multi" and output_fields:
+                self.update_status(f"已添加多字段AI列: {column_name} (模型: {ai_model}, 字段: {', '.join(output_fields)})", "success")
+            else:
+                self.update_status(f"已添加AI列: {column_name} (模型: {ai_model})", "success")
+            
+            self.update_table_display()
+            self.update_title()  # 更新标题栏
+            
+    def create_normal_column(self, position=None, side=None): # Added position and side parameters
+        """新建普通列. 若提供了position, 则在该位置插入,否则追加到末尾.""" # Docstring updated
         if self.table_manager.get_dataframe() is None:
             messagebox.showwarning("警告", "请先创建表格或导入数据文件")
             return
             
-        # 简单输入对话框
-        column_name = tk.simpledialog.askstring("新建列", "请输入列名:")
-        if column_name and column_name.strip():
-            column_name = column_name.strip()
-            if column_name not in self.table_manager.get_column_names():
-                self.table_manager.add_normal_column(column_name)
-                self.update_table_display()
-                self.update_status(f"已添加列: {column_name}", "success")
-            else:
-                messagebox.showerror("错误", f"列名 '{column_name}' 已存在")
+        # 询问用户创建方式
+        choice = self.ask_normal_column_creation_type()
+        if choice is None: # User cancelled
+            return
+            
+        if choice == "manual":
+            # 手动创建
+            column_name = tk.simpledialog.askstring("新建列", "请输入列名:")
+            if column_name and column_name.strip():
+                column_name = column_name.strip()
+                if column_name not in self.table_manager.get_column_names():
+                    success = False
+                    if position is not None:
+                        success = self.table_manager.insert_column_at_position(position, column_name)
+                        status_message_verb = f"已在{side}侧插入普通列" if side else "已插入普通列"
+                    else:
+                        success = self.table_manager.add_normal_column(column_name)
+                        status_message_verb = "已添加列"
+                    
+                    if success:
+                        self.update_table_display()
+                        self.update_status(f"{status_message_verb}: {column_name}", "success")
+                        self.update_title()  # 更新标题栏
+                    else:
+                        messagebox.showerror("错误", f"创建普通列 '{column_name}' 失败")
+                else:
+                    messagebox.showerror("错误", f"列名 '{column_name}' 已存在")
+        elif choice == "jsonl":
+            # 从JSONL导入
+            # Pass position to import_from_jsonl. If None, it will append.
+            self.import_from_jsonl(position=position, side=side) 
+            
+    def ask_normal_column_creation_type(self):
+        """询问普通列创建方式"""
+        dialog = tk.Toplevel(self.root)
+        dialog.title("选择创建方式")
+        dialog.geometry("350x200")
+        dialog.resizable(False, False)
+        dialog.transient(self.root)
+        dialog.grab_set()
+
+        # 居中显示
+        dialog.update_idletasks()
+        x = (dialog.winfo_screenwidth() // 2) - (175)
+        y = (dialog.winfo_screenheight() // 2) - (100)
+        dialog.geometry(f"350x200+{x}+{y}")
+
+        result = [None]  # 使用列表存储结果
+
+        ttk.Label(dialog, text="选择普通列创建方式:", style='Title.TLabel').pack(pady=15)
+
+        choice_var = tk.StringVar(value="manual")
+
+        ttk.Radiobutton(dialog, text="📝 手动创建空白列", variable=choice_var, value="manual").pack(anchor=tk.W, padx=30, pady=5)
+        ttk.Radiobutton(dialog, text="📥 从JSONL文件导入", variable=choice_var, value="jsonl").pack(anchor=tk.W, padx=30, pady=5)
+
+        button_frame = ttk.Frame(dialog)
+        button_frame.pack(pady=20)
+
+        def on_ok():
+            result[0] = choice_var.get()
+            dialog.destroy()
+
+        def on_cancel():
+            result[0] = None
+            dialog.destroy()
+
+        ttk.Button(button_frame, text="确定", command=on_ok).pack(side=tk.LEFT, padx=5)
+        ttk.Button(button_frame, text="取消", command=on_cancel).pack(side=tk.LEFT, padx=5)
+
+        # 绑定回车和ESC键
+        dialog.bind('<Return>', lambda e: on_ok())
+        dialog.bind('<Escape>', lambda e: on_cancel())
+
+        dialog.wait_window()
+        return result[0]
+        
+    def import_from_jsonl(self, position=None, side=None): # Added position and side
+        """从JSONL文件导入数据. 若提供position, 则尝试在该位置插入.""" # Docstring updated
+        from jsonl_import_dialog import JsonlImportDialog
+        
+        def on_import_result(result):
+            if result:
+                match_field = result['match_field']
+                source_field = result['source_field']
+                column_name = result['column_name']
+                jsonl_data = result['jsonl_data']
+                
+                # 执行导入
+                # Pass position to table_manager.import_from_jsonl
+                success, message = self.table_manager.import_from_jsonl(
+                    match_field, source_field, column_name, jsonl_data, position=position
+                )
+                
+                if success:
+                    self.update_table_display()
+                    # Modify status message if side is available (for insertion context)
+                    status_message = message
+                    if position is not None and side:
+                        # Example: "已在左侧通过JSONL导入: new_col" - customize as needed
+                        status_message = f"已在{side}侧通过JSONL导入: {column_name}" 
+                                       
+                    self.update_status(status_message, "success")
+                    self.update_title()
+                    messagebox.showinfo("成功", message) # Original message for dialog
+                else:
+                    messagebox.showerror("失败", message)
+        
+        try:
+            dialog = JsonlImportDialog(self.root, self.table_manager, on_import_result)
+            dialog.show()
+        except Exception as e:
+            messagebox.showerror("错误", f"打开JSONL导入对话框失败: {e}")
+                
+    def create_long_text_column(self):
+        """创建长文本列"""
+        if self.table_manager.get_dataframe() is None:
+            messagebox.showwarning("警告", "请先创建表格或导入数据文件")
+            return
+            
+        print("DEBUG: Entering create_long_text_column") # Debug print
+
+        from long_text_column_dialog import LongTextColumnDialog
+        
+        def on_result(result):
+            if result:
+                column_name = result['column_name']
+                filename_field = result['filename_field']
+                folder_path = result['folder_path']
+                preview_length = result['preview_length']
+                
+                # 添加长文本列
+                success = self.table_manager.add_long_text_column(
+                    column_name, filename_field, folder_path, preview_length
+                )
+                
+                if success:
+                    self.update_table_display()
+                    self.update_status(f"已添加长文本列: {column_name}", "success")
+                else:
+                    messagebox.showerror("错误", "创建长文本列失败")
+        
+        try:
+            dialog = LongTextColumnDialog(self.root, self.table_manager, on_result)
+            print("DEBUG: LongTextColumnDialog instance created.") # Debug print
+            dialog.show()
+            print("DEBUG: LongTextColumnDialog closed.") # Debug print
+        except Exception as e:
+            print(f"ERROR: Failed to open LongTextColumnDialog: {e}") # Debug print
+            messagebox.showerror("错误", f"打开长文本列对话框失败: {e}")
                 
     def add_row(self):
         """添加新行"""
         if self.table_manager.get_dataframe() is None:
             messagebox.showwarning("警告", "请先创建表格")
             return
+        
+        # 保存状态用于撤销
+        self.save_state("添加行")
             
         success = self.table_manager.add_row()
         if success:
             self.update_table_display()
             self.update_status("已添加新行", "success")
+            self.update_title()  # 更新标题栏
     
     def insert_row_at_position(self, position, direction):
         """在指定位置插入行"""
@@ -1731,44 +2446,138 @@ class AIExcelApp:
             
         # 获取当前选中列的位置
         position = 0  # 默认位置
-        if hasattr(self, 'selection_info') and self.selection_info.get('column_index') is not None:
-            col_index = self.selection_info['column_index']
+        # Ensure self.selection_info and 'column_index' exist before accessing
+        current_col_index = None
+        if hasattr(self, 'selection_info') and self.selection_info:
+            current_col_index = self.selection_info.get('column_index')
+
+        if current_col_index is not None:
+            col_index = current_col_index
             position = col_index if direction == "left" else col_index + 1
         else:
-            # 如果没有选中，插入到末尾
+            # 如果没有选中，根据方向决定插入开头还是末尾
             df = self.table_manager.get_dataframe()
-            position = len(df.columns) if direction == "right" else 0
-            
-        # 使用AI列对话框来选择列类型
-        from ai_column_dialog import AIColumnDialog
-        dialog = AIColumnDialog(self.root, self.table_manager.get_column_names())
-        result = dialog.show()
-        
-        if result:
-            if len(result) == 4:  # 新格式：包含模型信息
-                column_name, prompt_template, is_ai_column, ai_model = result
-            else:  # 向后兼容旧格式
-                column_name, prompt_template, is_ai_column = result
-                ai_model = "gpt-4.1"
+            if df is not None:
+                 position = 0 if direction == "left" else len(df.columns)
+            # If df is None, position remains 0, though create_table checks should prevent this path.
+
+        # 询问用户要插入哪种类型的列
+        column_type_choice = self.ask_column_type_for_insertion()
+        if column_type_choice is None: # 用户取消
+            return
+
+        column_name = None
+        success = False # Initialize success to False
+        side = "左" if direction == "left" else "右"
+
+        if column_type_choice == "ai":
+            from ai_column_dialog import AIColumnDialog
+            dialog = AIColumnDialog(self.root, self.table_manager.get_column_names())
+            result = dialog.show()
+            if result:
+                column_name = result['column_name']
+                prompt_template = result['prompt']
+                ai_model = result['model']
+                processing_params = result['processing_params']
+                output_mode = result.get('output_mode', 'single')
+                output_fields = result.get('output_fields', [])
+                if column_name in self.table_manager.get_column_names():
+                    messagebox.showerror("错误", f"列名 '{column_name}' 已存在")
+                    return
+                success = self.table_manager.insert_column_at_position(
+                    position, column_name, prompt_template=prompt_template, is_ai_column=True, 
+                    ai_model=ai_model, processing_params=processing_params, output_mode=output_mode, 
+                    output_fields=output_fields
+                )
+                if success:
+                    if output_mode == "multi" and output_fields:
+                        self.update_status(f"已在{side}侧插入多字段AI列: {column_name} (字段: {', '.join(output_fields)})", "success")
+                    else:
+                        self.update_status(f"已在{side}侧插入AI列: {column_name}", "success")
+                else:
+                    messagebox.showerror("错误", "插入AI列失败")
+
+        elif column_type_choice == "long_text":
+            from long_text_column_dialog import LongTextColumnDialog
+            dialog = LongTextColumnDialog(self.root, self.table_manager, lambda r: None)
+            dialog.show()
+            result = dialog.result
+            if result:
+                column_name = result['column_name']
+                filename_field = result['filename_field']
+                folder_path = result['folder_path']
+                preview_length = result['preview_length']
+
+                if column_name in self.table_manager.get_column_names():
+                    messagebox.showerror("错误", f"列名 '{column_name}' 已存在")
+                    return
                 
-            # 检查列名是否已存在
-            if column_name in self.table_manager.get_column_names():
-                messagebox.showerror("错误", f"列名 '{column_name}' 已存在")
-                return
-                
-            # 在指定位置插入列
-            success = self.table_manager.insert_column_at_position(
-                position, column_name, prompt_template if is_ai_column else None, is_ai_column, ai_model
-            )
-            
-            if success:
-                self.update_table_display()
-                side = "左" if direction == "left" else "右"
-                col_type = "AI列" if is_ai_column else "普通列"
-                self.update_status(f"已在{side}侧插入{col_type}: {column_name}", "success")
-            else:
-                messagebox.showerror("错误", "插入列失败")
-            
+                # 先插入普通列，再转换为长文本列
+                success = self.table_manager.insert_column_at_position(position, column_name)
+                if success:
+                    # 添加长文本列配置
+                    self.table_manager.long_text_columns[column_name] = {
+                        "filename_field": filename_field,
+                        "folder_path": folder_path,
+                        "preview_length": preview_length
+                    }
+                    # 刷新长文本列内容
+                    self.table_manager.refresh_long_text_column(column_name)
+                    self.update_status(f"已在{side}侧插入长文本列: {column_name}", "success")
+                else:
+                    messagebox.showerror("错误", "插入长文本列失败")
+
+        elif column_type_choice == "normal": # Normal column
+            # 不再直接创建，而是调用 create_normal_column，它内部会处理创建方式（手动或JSONL）
+            # create_normal_column 将处理列名输入、查重和实际的插入逻辑
+            # 它也需要知道插入的位置 position 和 side (用于状态消息)
+            self.create_normal_column(position=position, side=side)
+            # success 和 column_name 的处理将移到 create_normal_column 内部
+            # 因此这里不需要再处理 success 或调用 update_table_display
+
+        # if success: # This check is now handled within create_normal_column or other specific column creation methods
+        #     self.update_table_display()
+
+    def ask_column_type_for_insertion(self):
+        """询问用户要插入的列类型"""
+        dialog = tk.Toplevel(self.root)
+        dialog.title("选择列类型")
+        dialog.geometry("300x200")
+        dialog.resizable(False, False)
+        dialog.transient(self.root)
+        dialog.grab_set()
+
+        # 居中显示
+        dialog.update_idletasks()
+        x = (dialog.winfo_screenwidth() // 2) - (300 // 2)
+        y = (dialog.winfo_screenheight() // 2) - (200 // 2)
+        dialog.geometry(f"300x200+{x}+{y}")
+
+        column_type_var = tk.StringVar(value="ai") # Default to AI column
+        result = [None] # Use a list to store the result
+
+        ttk.Label(dialog, text="请选择要插入的列类型:", style='Title.TLabel').pack(pady=10)
+
+        ttk.Radiobutton(dialog, text="AI处理列", variable=column_type_var, value="ai").pack(anchor=tk.W, padx=20)
+        ttk.Radiobutton(dialog, text="长文本列", variable=column_type_var, value="long_text").pack(anchor=tk.W, padx=20)
+        ttk.Radiobutton(dialog, text="普通列", variable=column_type_var, value="normal").pack(anchor=tk.W, padx=20)
+
+        def on_ok():
+            result[0] = column_type_var.get()
+            dialog.destroy()
+
+        def on_cancel():
+            dialog.destroy()
+
+        button_frame = ttk.Frame(dialog)
+        button_frame.pack(pady=10)
+
+        ttk.Button(button_frame, text="确定", command=on_ok).pack(side=tk.LEFT, padx=5)
+        ttk.Button(button_frame, text="取消", command=on_cancel).pack(side=tk.LEFT, padx=5)
+
+        dialog.wait_window()
+        return result[0]
+
     def clear_data(self):
         """清空数据"""
         if self.table_manager.get_dataframe() is None:
@@ -1778,6 +2587,7 @@ class AIExcelApp:
         if result:
             self.table_manager.clear_all_data()
             self.show_welcome()
+            self.update_title()  # 更新标题栏
             self.update_status("已清空数据", "success")
 
     def test_ai_connection(self):
@@ -2189,6 +2999,34 @@ class AIExcelApp:
             messagebox.showerror("错误", f"导出失败: {str(e)}")
             self.update_status("导出失败", "error")
     
+    def show_conditional_export(self):
+        """显示条件筛选导出对话框"""
+        if self.table_manager.get_dataframe() is None:
+            messagebox.showwarning("警告", "请先加载数据")
+            return
+            
+        try:
+            from conditional_export_dialog import ConditionalExportDialog
+            dialog = ConditionalExportDialog(self.root, self.table_manager)
+            dialog.show()
+        except Exception as e:
+            messagebox.showerror("错误", f"打开条件筛选导出对话框失败: {e}")
+            
+    def show_find_replace(self):
+        """显示查找替换对话框"""
+        if self.table_manager.get_dataframe() is None:
+            messagebox.showwarning("警告", "请先加载数据")
+            return
+            
+        try:
+            from find_replace_dialog import FindReplaceDialog
+            dialog = FindReplaceDialog(self.root, self.table_manager)
+            dialog.show()
+            # 替换完成后刷新显示
+            self.update_table_display()
+        except Exception as e:
+            messagebox.showerror("错误", f"打开查找替换对话框失败: {e}")
+            
     def quick_export_excel(self):
         """快速导出Excel（使用上次的选择）"""
         if self.table_manager.get_dataframe() is None:
@@ -2221,7 +3059,7 @@ class AIExcelApp:
         text_widget.pack(fill=tk.BOTH, expand=True)
         
         help_text = """
-🚀 AI Excel 批量数据处理工具使用说明
+🚀 AI 批量数据处理工具使用说明
 
 📋 **基本操作**：
 1.  **新建表格**：创建一个空白的数据表格。
@@ -2555,36 +3393,135 @@ class AIExcelApp:
             messagebox.showwarning("警告", "请先创建表格或导入数据文件")
             return
             
-        # 使用AI列对话框来选择列类型
-        from ai_column_dialog import AIColumnDialog
-        dialog = AIColumnDialog(self.root, self.table_manager.get_column_names())
-        result = dialog.show()
-        
-        if result:
-            # 处理返回值 - 支持新格式（包含AI模型）和旧格式的兼容性
-            if len(result) == 4:  # 新格式：包含模型信息
-                column_name, prompt_template, is_ai_column, ai_model = result
-            else:  # 向后兼容旧格式
-                column_name, prompt_template, is_ai_column = result
-                ai_model = "gpt-4.1"  # 默认模型
-            
-            # 检查列名是否已存在
-            if column_name in self.table_manager.get_column_names():
-                messagebox.showerror("错误", f"列名 '{column_name}' 已存在")
-                return
+        # 计算实际插入位置
+        actual_position = position  # 使用传入的position参数
+        # Ensure self.selection_info and 'column_index' exist before accessing
+        current_col_index = None
+        if hasattr(self, 'selection_info') and self.selection_info:
+            current_col_index = self.selection_info.get('column_index')
+
+        if current_col_index is not None:
+            col_index = current_col_index
+            actual_position = col_index if direction == "left" else col_index + 1
+        else:
+            # 如果没有选中，根据方向决定插入开头还是末尾
+            df = self.table_manager.get_dataframe()
+            if df is not None:
+                actual_position = 0 if direction == "left" else len(df.columns)
+            # If df is None, actual_position remains as passed position
+
+        # 询问用户要插入哪种类型的列
+        column_type_choice = self.ask_column_type_for_insertion()
+        if column_type_choice is None: # 用户取消
+            return
+
+        column_name = None
+        success = False # Initialize success to False
+        side = "左" if direction == "left" else "右"
+
+        if column_type_choice == "ai":
+            from ai_column_dialog import AIColumnDialog
+            dialog = AIColumnDialog(self.root, self.table_manager.get_column_names())
+            result = dialog.show()
+            if result:
+                column_name = result['column_name']
+                prompt_template = result['prompt']
+                ai_model = result['model']
+                processing_params = result['processing_params']
+                output_mode = result.get('output_mode', 'single')
+                output_fields = result.get('output_fields', [])
+                if column_name in self.table_manager.get_column_names():
+                    messagebox.showerror("错误", f"列名 '{column_name}' 已存在")
+                    return
+                success = self.table_manager.insert_column_at_position(
+                    actual_position, column_name, prompt_template=prompt_template, is_ai_column=True, 
+                    ai_model=ai_model, processing_params=processing_params, output_mode=output_mode, 
+                    output_fields=output_fields
+                )
+                if success:
+                    if output_mode == "multi" and output_fields:
+                        self.update_status(f"已在{side}侧插入多字段AI列: {column_name} (字段: {', '.join(output_fields)})", "success")
+                    else:
+                        self.update_status(f"已在{side}侧插入AI列: {column_name}", "success")
+                    self.update_table_display()
+                else:
+                    messagebox.showerror("错误", "插入AI列失败")
+
+        elif column_type_choice == "long_text":
+            from long_text_column_dialog import LongTextColumnDialog
+            dialog = LongTextColumnDialog(self.root, self.table_manager, lambda r: None)
+            dialog.show()
+            result = dialog.result
+            if result:
+                column_name = result['column_name']
+                filename_field = result['filename_field']
+                folder_path = result['folder_path']
+                preview_length = result['preview_length']
+
+                if column_name in self.table_manager.get_column_names():
+                    messagebox.showerror("错误", f"列名 '{column_name}' 已存在")
+                    return
                 
-            # 在指定位置插入列
-            success = self.table_manager.insert_column_at_position(
-                position, column_name, prompt_template if is_ai_column else None, is_ai_column, ai_model
-            )
-            
-            if success:
-                self.update_table_display()
-                side = "左" if direction == "left" else "右"
-                col_type = f"AI列 (模型: {ai_model})" if is_ai_column else "普通列"
-                self.update_status(f"已在{side}侧插入{col_type}: {column_name}", "success")
-            else:
-                messagebox.showerror("错误", "插入列失败")
+                # 先插入普通列，再转换为长文本列
+                success = self.table_manager.insert_column_at_position(actual_position, column_name)
+                if success:
+                    # 添加长文本列配置
+                    self.table_manager.long_text_columns[column_name] = {
+                        "filename_field": filename_field,
+                        "folder_path": folder_path,
+                        "preview_length": preview_length
+                    }
+                    # 刷新长文本列内容
+                    self.table_manager.refresh_long_text_column(column_name)
+                    self.update_status(f"已在{side}侧插入长文本列: {column_name}", "success")
+                    self.update_table_display()
+                else:
+                    messagebox.showerror("错误", "插入长文本列失败")
+
+        elif column_type_choice == "normal": # Normal column
+            # 调用 create_normal_column，它内部会处理创建方式（手动或JSONL）
+            # 它也需要知道插入的位置 actual_position 和 side (用于状态消息)
+            self.create_normal_column(position=actual_position, side=side)
+
+    def ask_column_type_for_insertion(self):
+        """询问用户要插入的列类型"""
+        dialog = tk.Toplevel(self.root)
+        dialog.title("选择列类型")
+        dialog.geometry("300x200")
+        dialog.resizable(False, False)
+        dialog.transient(self.root)
+        dialog.grab_set()
+
+        # 居中显示
+        dialog.update_idletasks()
+        x = (dialog.winfo_screenwidth() // 2) - (300 // 2)
+        y = (dialog.winfo_screenheight() // 2) - (200 // 2)
+        dialog.geometry(f"300x200+{x}+{y}")
+
+        column_type_var = tk.StringVar(value="ai") # Default to AI column
+        result = [None] # Use a list to store the result
+
+        ttk.Label(dialog, text="请选择要插入的列类型:", style='Title.TLabel').pack(pady=10)
+
+        ttk.Radiobutton(dialog, text="AI处理列", variable=column_type_var, value="ai").pack(anchor=tk.W, padx=20)
+        ttk.Radiobutton(dialog, text="长文本列", variable=column_type_var, value="long_text").pack(anchor=tk.W, padx=20)
+        ttk.Radiobutton(dialog, text="普通列", variable=column_type_var, value="normal").pack(anchor=tk.W, padx=20)
+
+        def on_ok():
+            result[0] = column_type_var.get()
+            dialog.destroy()
+
+        def on_cancel():
+            dialog.destroy()
+
+        button_frame = ttk.Frame(dialog)
+        button_frame.pack(pady=10)
+
+        ttk.Button(button_frame, text="确定", command=on_ok).pack(side=tk.LEFT, padx=5)
+        ttk.Button(button_frame, text="取消", command=on_cancel).pack(side=tk.LEFT, padx=5)
+
+        dialog.wait_window()
+        return result[0]
 
     def on_column_drag_start(self, event):
         """开始列拖拽"""
@@ -2691,12 +3628,16 @@ class AIExcelApp:
         # 确认删除
         result = messagebox.askyesno("确认删除", 
                                    f"确定要删除第 {row_index + 1} 行吗？\n\n"
-                                   f"此操作将删除该行的所有数据，无法撤销。")
+                                   f"此操作将删除该行的所有数据。")
         if result:
+            # 保存状态用于撤销
+            self.save_state(f"删除第{row_index+1}行")
+            
             # 执行删除
             success = self.table_manager.delete_row(row_index)
             if success:
                 self.update_table_display()
+                self.update_title()  # 更新标题栏
                 self.update_status(f"已删除第 {row_index + 1} 行", "success")
             else:
                 messagebox.showerror("错误", "删除行失败")
@@ -2751,10 +3692,20 @@ class AIExcelApp:
             messagebox.showwarning("警告", "没有数据需要处理")
             return
             
+        # 考虑筛选状态
+        if self.filter_state['active'] and self.filter_state['filtered_indices']:
+            # 如果有筛选，只处理筛选后的行
+            rows_to_process = self.filter_state['filtered_indices']
+            data_description = f"筛选后的 {len(rows_to_process)} 行"
+        else:
+            # 处理所有行
+            rows_to_process = list(range(len(df)))
+            data_description = f"所有 {len(df)} 行"
+        
         # 确认处理
-        total_tasks = len(df) * len(ai_columns)
+        total_tasks = len(rows_to_process) * len(ai_columns)
         result = messagebox.askyesno("确认全部处理", 
-                                   f"即将处理所有 {len(ai_columns)} 个AI列的所有 {len(df)} 行数据。\n"
+                                   f"即将处理所有 {len(ai_columns)} 个AI列的{data_description}数据。\n"
                                    f"总共 {total_tasks} 个任务，这可能需要较长时间。\n\n"
                                    f"是否继续？")
         if not result:
@@ -2766,9 +3717,9 @@ class AIExcelApp:
             success_count = 0
             current_task = 0
             
-            # 处理每个AI列的每一行，优化性能
+            # 处理每个AI列的筛选行，优化性能
             for col_name, prompt_template in ai_columns.items():
-                for row_index in range(len(df)):
+                for row_index in rows_to_process:
                     try:
                         success, result = self.ai_processor.process_single_cell(
                             df, row_index, col_name, prompt_template
@@ -2878,10 +3829,19 @@ class AIExcelApp:
             if not col_name:
                 return
                 
+        # 考虑筛选状态
+        if self.filter_state['active'] and self.filter_state['filtered_indices']:
+            # 如果有筛选，只处理筛选后的行
+            rows_to_process = self.filter_state['filtered_indices']
+            data_description = f"筛选后的 {len(rows_to_process)} 行"
+        else:
+            # 处理所有行
+            rows_to_process = list(range(len(df)))
+            data_description = f"所有 {len(df)} 行"
+        
         # 确认处理
-        row_count = len(df)
         result = messagebox.askyesno("确认单列处理", 
-                                   f"即将处理AI列 '{col_name}' 的所有 {row_count} 行数据。\n\n"
+                                   f"即将处理AI列 '{col_name}' 的{data_description}数据。\n\n"
                                    f"是否继续？")
         if not result:
             return
@@ -2892,8 +3852,8 @@ class AIExcelApp:
             success_count = 0
             prompt_template = ai_columns[col_name]
             
-            # 处理选中列的每一行，优化性能
-            for row_index in range(row_count):
+            # 处理选中列的筛选行，优化性能
+            for i, row_index in enumerate(rows_to_process):
                 try:
                     success, result = self.ai_processor.process_single_cell(
                         df, row_index, col_name, prompt_template
@@ -2903,14 +3863,14 @@ class AIExcelApp:
                         success_count += 1
                         
                     # 更新表格进度条
-                    self.update_table_progress(row_index + 1, row_count, f"处理列 {col_name}")
+                    self.update_table_progress(i + 1, len(rows_to_process), f"处理列 {col_name}")
                     
                     # 减少界面更新频率，每3行更新一次显示
-                    if (row_index + 1) % 3 == 0 or row_index == row_count - 1:
+                    if (i + 1) % 3 == 0 or i == len(rows_to_process) - 1:
                         self.update_table_display()
                     
                     # 减少延迟
-                    if (row_index + 1) % 3 == 0:
+                    if (i + 1) % 3 == 0:
                         time.sleep(0.05)
                     
                 except Exception as e:
@@ -2918,8 +3878,8 @@ class AIExcelApp:
                     
             # 最终更新显示
             self.update_table_display()
-            self.update_status(f"列 {col_name} 处理完成 ({success_count}/{row_count})", "success")
-            messagebox.showinfo("完成", f"列 '{col_name}' 处理完成！\n成功: {success_count}/{row_count}")
+            self.update_status(f"列 {col_name} 处理完成 ({success_count}/{len(rows_to_process)})", "success")
+            messagebox.showinfo("完成", f"列 '{col_name}' 处理完成！\n成功: {success_count}/{len(rows_to_process)}")
             
         except Exception as e:
             messagebox.showerror("错误", f"单列处理时出错: {str(e)}")
@@ -3197,8 +4157,515 @@ class AIExcelApp:
                 self.update_status("已重置为原始顺序", "success")
 
     def on_closing(self):
-        """处理窗口关闭事件"""
-        self.root.quit()
+        """处理窗口关闭事件，提示保存"""
+        if self.table_manager.has_unsaved_changes():
+            response = messagebox.askyesnocancel(
+                "退出确认", 
+                "有未保存的更改，您想保存吗？"
+            )
+            if response is True:  # 用户选择"是" (保存)
+                success, _ = self.save_project() # 调用save_project
+                if success: # 只有在保存成功后才退出
+                    self.root.quit()
+            elif response is False: # 用户选择"否" (不保存)
+                self.root.quit()
+            # 如果用户选择"取消"，则不执行任何操作，窗口不关闭
+        else:
+            self.root.quit()
+
+    def toggle_full_prompt_display(self):
+        """切换完整Prompt的显示/隐藏"""
+        if self.show_full_prompt_var.get():
+            self.prompt_text.config(height=10) # 展开高度
+        else:
+            self.prompt_text.config(height=3) # 默认高度
+
+    def show_ai_column_progress(self, col_name):
+        """显示AI列处理进度对话框"""
+        df = self.table_manager.get_dataframe()
+        if df is None:
+            messagebox.showwarning("警告", "没有数据")
+            return
+            
+        # 获取处理状态
+        status = self.ai_processor.get_column_processing_status(df, col_name)
+        if status is None:
+            messagebox.showwarning("警告", f"列 '{col_name}' 不存在")
+            return
+            
+        # 创建进度查询对话框
+        dialog = tk.Toplevel(self.root)
+        dialog.title(f"AI列处理进度 - {col_name}")
+        dialog.geometry("600x500")
+        dialog.resizable(True, True)
+        dialog.transient(self.root)
+        dialog.grab_set()
+        
+        # 居中显示
+        dialog.update_idletasks()
+        x = (dialog.winfo_screenwidth() // 2) - (600 // 2)
+        y = (dialog.winfo_screenheight() // 2) - (500 // 2)
+        dialog.geometry(f"600x500+{x}+{y}")
+        
+        # 主框架
+        main_frame = ttk.Frame(dialog, padding="15")
+        main_frame.pack(fill=tk.BOTH, expand=True)
+        
+        # 标题
+        title_label = ttk.Label(main_frame, text=f"AI列处理进度分析 - {col_name}", 
+                               font=('Microsoft YaHei UI', 14, 'bold'))
+        title_label.pack(pady=(0, 15))
+        
+        # 统计信息框架
+        stats_frame = ttk.LabelFrame(main_frame, text="处理统计", padding="10")
+        stats_frame.pack(fill=tk.X, pady=(0, 15))
+        
+        # 统计信息网格
+        stats_grid = ttk.Frame(stats_frame)
+        stats_grid.pack(fill=tk.X)
+        
+        # 第一行统计
+        row1 = ttk.Frame(stats_grid)
+        row1.pack(fill=tk.X, pady=(0, 5))
+        
+        ttk.Label(row1, text="总行数:", font=('Microsoft YaHei UI', 10, 'bold')).pack(side=tk.LEFT)
+        ttk.Label(row1, text=str(status['total_rows']), foreground="blue").pack(side=tk.LEFT, padx=(5, 20))
+        
+        ttk.Label(row1, text="已处理:", font=('Microsoft YaHei UI', 10, 'bold')).pack(side=tk.LEFT)
+        ttk.Label(row1, text=str(status['processed_count']), foreground="green").pack(side=tk.LEFT, padx=(5, 20))
+        
+        ttk.Label(row1, text="完成率:", font=('Microsoft YaHei UI', 10, 'bold')).pack(side=tk.LEFT)
+        ttk.Label(row1, text=f"{status['completion_rate']}%", foreground="green").pack(side=tk.LEFT, padx=(5, 0))
+        
+        # 第二行统计
+        row2 = ttk.Frame(stats_grid)
+        row2.pack(fill=tk.X, pady=(0, 5))
+        
+        ttk.Label(row2, text="失败:", font=('Microsoft YaHei UI', 10, 'bold')).pack(side=tk.LEFT)
+        ttk.Label(row2, text=str(status['failed_count']), foreground="red").pack(side=tk.LEFT, padx=(5, 20))
+        
+        ttk.Label(row2, text="空白:", font=('Microsoft YaHei UI', 10, 'bold')).pack(side=tk.LEFT)
+        ttk.Label(row2, text=str(status['empty_count']), foreground="orange").pack(side=tk.LEFT, padx=(5, 20))
+        
+        # 进度条
+        progress_frame = ttk.Frame(stats_grid)
+        progress_frame.pack(fill=tk.X, pady=(10, 0))
+        
+        ttk.Label(progress_frame, text="进度:", font=('Microsoft YaHei UI', 10, 'bold')).pack(side=tk.LEFT)
+        progress_bar = ttk.Progressbar(progress_frame, length=300, mode='determinate')
+        progress_bar.pack(side=tk.LEFT, padx=(10, 0), fill=tk.X, expand=True)
+        progress_bar['value'] = status['completion_rate']
+        
+        # 任务选择框架
+        task_frame = ttk.LabelFrame(main_frame, text="选择要处理的任务", padding="10")
+        task_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 15))
+        
+        # 任务选择选项
+        task_var = tk.StringVar(value="failed_and_empty")
+        
+        ttk.Radiobutton(task_frame, text=f"仅处理失败的任务 ({status['failed_count']}行)", 
+                       variable=task_var, value="failed").pack(anchor=tk.W, pady=2)
+        
+        ttk.Radiobutton(task_frame, text=f"仅处理空白的任务 ({status['empty_count']}行)", 
+                       variable=task_var, value="empty").pack(anchor=tk.W, pady=2)
+        
+        ttk.Radiobutton(task_frame, text=f"处理失败和空白的任务 ({status['failed_count'] + status['empty_count']}行)", 
+                       variable=task_var, value="failed_and_empty").pack(anchor=tk.W, pady=2)
+        
+        ttk.Radiobutton(task_frame, text=f"重新处理所有任务 ({status['total_rows']}行)", 
+                       variable=task_var, value="all").pack(anchor=tk.W, pady=2)
+        
+        # 详细信息框架（可选显示）
+        details_frame = ttk.LabelFrame(main_frame, text="详细信息", padding="10")
+        details_frame.pack(fill=tk.X, pady=(0, 15))
+        
+        # 显示失败行和空白行的详细信息
+        details_text = tk.Text(details_frame, height=6, wrap=tk.WORD)
+        details_text.pack(fill=tk.X)
+        
+        details_content = ""
+        if status['failed_rows']:
+            details_content += f"失败行号: {', '.join(map(str, status['failed_rows'][:20]))}"
+            if len(status['failed_rows']) > 20:
+                details_content += f" (共{len(status['failed_rows'])}行，仅显示前20行)"
+            details_content += "\n\n"
+            
+        if status['empty_rows']:
+            details_content += f"空白行号: {', '.join(map(str, status['empty_rows'][:20]))}"
+            if len(status['empty_rows']) > 20:
+                details_content += f" (共{len(status['empty_rows'])}行，仅显示前20行)"
+                
+        details_text.insert("1.0", details_content)
+        details_text.config(state=tk.DISABLED)
+        
+        # 按钮框架
+        button_frame = ttk.Frame(main_frame)
+        button_frame.pack(fill=tk.X)
+        
+        def start_processing():
+            """开始处理选中的任务"""
+            task_type = task_var.get()
+            
+            # 确定要处理的行
+            rows_to_process = []
+            if task_type == "failed":
+                rows_to_process = [row - 1 for row in status['failed_rows']]  # 转为0-based索引
+            elif task_type == "empty":
+                rows_to_process = [row - 1 for row in status['empty_rows']]
+            elif task_type == "failed_and_empty":
+                rows_to_process = [row - 1 for row in status['failed_rows'] + status['empty_rows']]
+            elif task_type == "all":
+                rows_to_process = list(range(status['total_rows']))
+                
+            if not rows_to_process:
+                messagebox.showinfo("提示", "没有需要处理的任务")
+                return
+                
+            # 确认处理
+            task_count = len(rows_to_process)
+            result = messagebox.askyesno("确认处理", 
+                                       f"即将处理 {task_count} 个任务。\n\n"
+                                       f"是否继续？")
+            if not result:
+                return
+                
+            dialog.destroy()
+            
+            # 开始处理
+            self.process_ai_column_concurrent(col_name, rows_to_process)
+            
+        def refresh_status():
+            """刷新状态"""
+            dialog.destroy()
+            self.show_ai_column_progress(col_name)
+            
+        def close_dialog():
+            """关闭对话框"""
+            dialog.destroy()
+            
+        # 按钮
+        ttk.Button(button_frame, text="🔄 刷新状态", command=refresh_status).pack(side=tk.LEFT, padx=(0, 10))
+        ttk.Button(button_frame, text="▶️ 开始处理", command=start_processing).pack(side=tk.LEFT, padx=(0, 10))
+        ttk.Button(button_frame, text="❌ 关闭", command=close_dialog).pack(side=tk.RIGHT)
+        
+        # 绑定快捷键
+        dialog.bind('<Escape>', lambda e: close_dialog())
+        dialog.bind('<F5>', lambda e: refresh_status())
+
+    def process_ai_column_concurrent(self, col_name, rows_to_process=None):
+        """并发处理AI列"""
+        ai_columns = self.table_manager.get_ai_columns()
+        if col_name not in ai_columns:
+            messagebox.showwarning("警告", f"'{col_name}' 不是AI列")
+            return
+        
+        df = self.table_manager.get_dataframe()
+        if df is None:
+            return
+            
+        # 获取AI列配置
+        config = ai_columns[col_name]
+        if isinstance(config, dict):
+            prompt_template = config.get("prompt", "")
+            model = config.get("model", "gpt-4.1")
+            output_mode = config.get("output_mode", "single")
+            output_fields = config.get("output_fields", [])
+            processing_params = config.get("processing_params", {
+                'max_workers': 3,
+                'request_delay': 0.5,
+                'max_retries': 2
+            })
+        else:
+            # 向后兼容
+            prompt_template = config
+            model = "gpt-4.1"
+            output_mode = "single"
+            output_fields = []
+            processing_params = {
+                'max_workers': 3,
+                'request_delay': 0.5,
+                'max_retries': 2
+            }
+        
+        # 如果未指定处理行，处理所有行（考虑筛选状态）
+        if rows_to_process is None:
+            if self.filter_state['active'] and self.filter_state['filtered_indices']:
+                # 如果有筛选，只处理筛选后的行
+                rows_to_process = self.filter_state['filtered_indices']
+            else:
+                # 否则处理所有行
+                rows_to_process = list(range(len(df)))
+            
+        task_count = len(rows_to_process)
+        if task_count == 0:
+            messagebox.showinfo("提示", "没有需要处理的任务")
+            return
+            
+        # 创建处理控制对话框
+        control_dialog = tk.Toplevel(self.root)
+        control_dialog.title(f"正在处理 - {col_name}")
+        control_dialog.geometry("500x300")
+        control_dialog.resizable(False, False)
+        control_dialog.transient(self.root)
+        control_dialog.grab_set()
+        
+        # 居中显示
+        control_dialog.update_idletasks()
+        x = (control_dialog.winfo_screenwidth() // 2) - (500 // 2)
+        y = (control_dialog.winfo_screenheight() // 2) - (300 // 2)
+        control_dialog.geometry(f"500x300+{x}+{y}")
+        
+        # 控制框架
+        control_frame = ttk.Frame(control_dialog, padding="20")
+        control_frame.pack(fill=tk.BOTH, expand=True)
+        
+        # 标题
+        title_label = ttk.Label(control_frame, text=f"正在处理AI列: {col_name}", 
+                               font=('Microsoft YaHei UI', 12, 'bold'))
+        title_label.pack(pady=(0, 15))
+        
+        # 配置信息
+        config_frame = ttk.LabelFrame(control_frame, text="处理配置", padding="10")
+        config_frame.pack(fill=tk.X, pady=(0, 15))
+        
+        config_info = tk.Text(config_frame, height=4, wrap=tk.WORD)
+        config_info.pack(fill=tk.X)
+        config_text = f"模型: {model}\n"
+        config_text += f"任务数: {task_count}\n"
+        config_text += f"并发数: {processing_params['max_workers']}\n"
+        config_text += f"请求延迟: {processing_params['request_delay']}秒"
+        config_info.insert("1.0", config_text)
+        config_info.config(state=tk.DISABLED)
+        
+        # 进度信息
+        progress_frame = ttk.LabelFrame(control_frame, text="处理进度", padding="10")
+        progress_frame.pack(fill=tk.X, pady=(0, 15))
+        
+        # 进度标签
+        progress_label = ttk.Label(progress_frame, text="准备开始处理...")
+        progress_label.pack(pady=(0, 5))
+        
+        # 进度条
+        progress_bar = ttk.Progressbar(progress_frame, length=400, mode='determinate')
+        progress_bar.pack(fill=tk.X, pady=(0, 5))
+        
+        # 统计标签
+        stats_label = ttk.Label(progress_frame, text="成功: 0 | 失败: 0 | 进度: 0%")
+        stats_label.pack()
+        
+        # 按钮框架
+        button_frame = ttk.Frame(control_frame)
+        button_frame.pack(fill=tk.X)
+        
+        # 停止按钮
+        stop_button = ttk.Button(button_frame, text="⏹️ 停止处理", style='Accent.TButton')
+        stop_button.pack(side=tk.LEFT)
+        
+        # 最小化按钮
+        minimize_button = ttk.Button(button_frame, text="🔽 最小化", command=lambda: control_dialog.iconify())
+        minimize_button.pack(side=tk.LEFT, padx=(10, 0))
+        
+        # 关闭按钮（初始状态禁用）
+        close_button = ttk.Button(button_frame, text="❌ 关闭", state='disabled')
+        close_button.pack(side=tk.RIGHT)
+        
+        # 处理状态变量
+        processing_stopped = threading.Event()
+        processing_finished = threading.Event()
+        
+        def stop_processing():
+            """停止处理"""
+            self.ai_processor.stop_current_processing()
+            processing_stopped.set()
+            stop_button.config(text="正在停止...", state='disabled')
+            progress_label.config(text="正在停止处理，请稍候...")
+            
+        def close_dialog():
+            """关闭对话框"""
+            if not processing_finished.is_set():
+                result = messagebox.askyesno("确认", "处理尚未完成，确定要关闭吗？")
+                if not result:
+                    return
+                self.ai_processor.stop_current_processing()
+            control_dialog.destroy()
+        
+        def update_progress_callback(completed, total, success_count, failed_count):
+            """进度更新回调"""
+            if control_dialog.winfo_exists():  # 检查窗口是否仍然存在
+                try:
+                    percentage = (completed / total * 100) if total > 0 else 0
+                    progress_bar['value'] = percentage
+                    progress_label.config(text=f"已处理 {completed}/{total} 个任务")
+                    stats_label.config(text=f"成功: {success_count} | 失败: {failed_count} | 进度: {percentage:.1f}%")
+                    control_dialog.update_idletasks()
+                except tk.TclError:
+                    # 窗口已关闭
+                    pass
+        
+        def processing_thread():
+            """处理线程"""
+            try:
+                # 设置AI处理器参数
+                self.ai_processor.set_processing_params(
+                    max_workers=processing_params['max_workers'],
+                    request_delay=processing_params['request_delay'],
+                    max_retries=processing_params['max_retries']
+                )
+                
+                # 开始处理
+                success, result = self.ai_processor.process_column_concurrent(
+                    df, col_name, prompt_template, model, self.table_manager,
+                    update_progress_callback, rows_to_process, 
+                    output_fields if output_mode == "multi" else None
+                )
+                
+                processing_finished.set()
+                
+                # 更新UI（在主线程中）
+                def update_ui():
+                    if control_dialog.winfo_exists():
+                        try:
+                            if success:
+                                stats = result
+                                final_text = f"处理完成！成功: {stats['success_count']}, 失败: {stats['failed_count']}"
+                                if stats['stopped']:
+                                    final_text = f"处理已停止。成功: {stats['success_count']}, 失败: {stats['failed_count']}"
+                                progress_label.config(text=final_text)
+                                stop_button.config(text="已完成", state='disabled')
+                            else:
+                                progress_label.config(text=f"处理失败: {result}")
+                                stop_button.config(text="已失败", state='disabled')
+                                
+                            close_button.config(state='normal')
+                            
+                            # 更新表格显示
+                            self.update_table_display()
+                            
+                        except tk.TclError:
+                            pass  # 窗口已关闭
+                            
+                control_dialog.after(0, update_ui)
+                
+            except Exception as e:
+                processing_finished.set()
+                def show_error():
+                    if control_dialog.winfo_exists():
+                        try:
+                            progress_label.config(text=f"处理出错: {str(e)}")
+                            stop_button.config(text="已出错", state='disabled')
+                            close_button.config(state='normal')
+                        except tk.TclError:
+                            pass
+                control_dialog.after(0, show_error)
+        
+        # 绑定按钮事件
+        stop_button.config(command=stop_processing)
+        close_button.config(command=close_dialog)
+        
+        # 绑定窗口关闭事件
+        control_dialog.protocol("WM_DELETE_WINDOW", close_dialog)
+        
+        # 启动处理线程
+        thread = threading.Thread(target=processing_thread, daemon=True)
+        thread.start()
+        
+        self.update_status(f"开始并发处理列 {col_name}，任务数: {task_count}", "normal")
+
+    def update_title(self):
+        """更新窗口标题，显示文件状态"""
+        title = "AI Excel Tool v2.0"
+        
+        # 如果有当前项目或文件
+        if self.current_project_path:
+            filename = os.path.basename(self.current_project_path)
+            title += f" - {filename}"
+        elif self.table_manager.file_path:
+            filename = os.path.basename(self.table_manager.file_path)
+            title += f" - {filename}"
+        elif self.table_manager.get_dataframe() is not None:
+            title += " - 未命名项目"
+            
+        # 如果有未保存的更改，添加星号
+        if self.table_manager.has_unsaved_changes():
+            title += " *"
+            
+        self.root.title(title)
+
+    def check_unsaved_changes_before_action(self, action_name):
+        """在执行操作前检查是否有未保存的更改"""
+        if self.table_manager.has_unsaved_changes():
+            response = messagebox.askyesnocancel(
+                "未保存的更改", 
+                f"当前有未保存的更改，在{action_name}前是否要保存？\n\n"
+                "选择'是'保存后继续，'否'直接继续，'取消'停止操作。"
+            )
+            if response is True:  # 用户选择"是" (保存)
+                success, _ = self.save_project()
+                return success  # 只有保存成功才继续
+            elif response is False:  # 用户选择"否" (不保存)
+                return True  # 继续操作
+            else:  # 用户选择"取消"
+                return False  # 停止操作
+        return True  # 没有未保存更改，继续操作
+    
+    def save_state(self, action_description):
+        """保存当前状态到撤销历史"""
+        try:
+            if self.table_manager.get_dataframe() is not None:
+                state = {
+                    'action': action_description,
+                    'timestamp': time.time(),
+                    'dataframe': self.table_manager.get_dataframe().copy(),
+                    'ai_columns': self.table_manager.get_ai_columns().copy(),
+                    'long_text_columns': self.table_manager.get_long_text_columns().copy()
+                }
+                
+                self.undo_history.append(state)
+                print(f"DEBUG: Saved state for action: {action_description}, history length: {len(self.undo_history)}")
+                
+                # 限制历史记录数量
+                if len(self.undo_history) > self.max_undo_steps:
+                    self.undo_history.pop(0)
+                    
+        except Exception as e:
+            print(f"保存状态失败: {e}")
+    
+    def undo_action(self):
+        """撤销上一步操作"""
+        try:
+            print(f"DEBUG: undo_action called, history length: {len(self.undo_history)}")
+            if not self.undo_history:
+                self.update_status("没有可撤销的操作", "normal")
+                print("DEBUG: No undo history available")
+                return
+                
+            # 获取最后一个状态
+            last_state = self.undo_history.pop()
+            print(f"DEBUG: Undoing action: {last_state['action']}")
+            
+            # 恢复数据框
+            self.table_manager.dataframe = last_state['dataframe'].copy()
+            
+            # 恢复AI列配置
+            self.table_manager.ai_columns = last_state['ai_columns'].copy()
+            
+            # 恢复长文本列配置
+            self.table_manager.long_text_columns = last_state['long_text_columns'].copy()
+            
+            # 更新界面显示
+            self.update_table_display()
+            
+            # 设置为有未保存的更改
+            self.table_manager.changes_made = True
+            self.update_title()
+            
+            action = last_state['action']
+            self.update_status(f"已撤销: {action}", "success")
+            print(f"DEBUG: Successfully undone: {action}")
+            
+        except Exception as e:
+            self.update_status(f"撤销失败: {str(e)}", "error")
+            print(f"撤销操作失败: {e}")
 
 def main():
     root = tk.Tk()
