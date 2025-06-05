@@ -59,6 +59,13 @@ class ProjectManager:
                     "long_text_column_count": len(long_text_columns)
                 }
                 
+                # 隐藏列配置
+                hidden_columns = table_manager.get_hidden_columns()
+                project_data["hidden_columns"] = {
+                    "hidden_column_names": hidden_columns,
+                    "hidden_column_count": len(hidden_columns)
+                }
+                
                 # 保存每个AI列的详细配置
                 for col_name, prompt in ai_columns.items():
                     # 如果是旧格式的prompt（字符串），将其转换为字典格式
@@ -70,6 +77,14 @@ class ProjectManager:
                         "prompt": prompt_dict["prompt"],
                         "column_type": "ai",
                         "model": prompt_dict.get("model", "gpt-4.1"), # 确保模型信息存在
+                        "output_mode": prompt_dict.get("output_mode", "single"),
+                        "output_fields": prompt_dict.get("output_fields", []),
+                        "field_mode": prompt_dict.get("field_mode", "predefined"),
+                        "processing_params": prompt_dict.get("processing_params", {
+                            'max_workers': 3,
+                            'request_delay': 0.5,
+                            'max_retries': 2
+                        }),
                         "created_at": datetime.now().isoformat(),
                         "last_processed": None,
                         "processing_stats": {
@@ -99,6 +114,7 @@ class ProjectManager:
                 project_data["table_data"] = None
                 project_data["ai_config"] = {"ai_columns": {}, "ai_column_count": 0}
                 project_data["long_text_config"] = {"long_text_columns": {}, "long_text_column_count": 0}
+                project_data["hidden_columns"] = {"hidden_column_names": [], "hidden_column_count": 0}
                 project_data["normal_columns"] = []
                 project_data["ui_state"] = {}
             
@@ -139,9 +155,10 @@ class ProjectManager:
                     # 设置到table_manager
                     table_manager.dataframe = df
                     
-                    # 清空table_manager中现有的AI列和长文本列配置，避免重复
+                    # 清空table_manager中现有的AI列、长文本列和隐藏列配置，避免重复
                     table_manager.ai_columns = {}
                     table_manager.long_text_columns = {}
+                    table_manager.hidden_columns = set()
 
                     # 恢复AI列配置
                     ai_config = project_data.get("ai_config", {})
@@ -149,7 +166,26 @@ class ProjectManager:
                     ai_columns = ai_config.get("prompt_templates", ai_config.get("ai_columns", {}))
                     for col_name, config in ai_columns.items():
                         if col_name in df.columns: # 确保列存在于数据框中
-                            table_manager.add_ai_column(col_name, config["prompt"], config.get("model", "gpt-4.1"), preserve_data=True)
+                            # 获取完整的配置参数
+                            processing_params = config.get("processing_params", {
+                                'max_workers': 3,
+                                'request_delay': 0.5,
+                                'max_retries': 2
+                            })
+                            output_mode = config.get("output_mode", "single")
+                            output_fields = config.get("output_fields", [])
+                            field_mode = config.get("field_mode", "predefined")
+                            
+                            table_manager.add_ai_column(
+                                col_name, 
+                                config["prompt"], 
+                                config.get("model", "gpt-4.1"),
+                                processing_params,
+                                output_mode,
+                                output_fields,
+                                field_mode,
+                                preserve_data=True
+                            )
                     
                     # 恢复长文本列配置
                     long_text_config = project_data.get("long_text_config", {})
@@ -161,6 +197,13 @@ class ProjectManager:
                     # 刷新长文本列内容（如果存在）
                     for col_name in table_manager.long_text_columns:
                         table_manager.refresh_long_text_column(col_name)
+                    
+                    # 恢复隐藏列配置
+                    hidden_columns_config = project_data.get("hidden_columns", {})
+                    hidden_column_names = hidden_columns_config.get("hidden_column_names", [])
+                    for col_name in hidden_column_names:
+                        if col_name in df.columns:  # 确保列存在于数据框中
+                            table_manager.hidden_columns.add(col_name)
                     
                     # 恢复界面状态（可选）
                     ui_state = project_data.get("ui_state", {})

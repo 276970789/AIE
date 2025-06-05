@@ -60,39 +60,87 @@ class AIProcessor:
         """重置停止标志"""
         self.stop_processing = False
         
-    def get_column_processing_status(self, dataframe, column_name):
+    def get_column_processing_status(self, dataframe, column_name, table_manager=None):
         """获取指定列的处理状态统计"""
         if dataframe is None or column_name not in dataframe.columns:
             return None
-            
+        
+        is_multi_field = False
+        output_fields = []
+        if table_manager:
+            ai_config = table_manager.get_ai_columns().get(column_name)
+            if isinstance(ai_config, dict):
+                if ai_config.get("output_mode") == "multi" and ai_config.get("output_fields"):
+                    is_multi_field = True
+                    output_fields = ai_config.get("output_fields")
+
         total_rows = len(dataframe)
-        processed_count = 0
-        failed_count = 0
-        empty_count = 0
+        # Counters for the sum total_rows = processed + empty + failed
+        current_processed_count = 0
+        current_failed_count = 0
+        current_empty_count = 0 
         
-        failed_rows = []
-        empty_rows = []
-        
+        # Informational counters and row lists
+        partially_processed_count_info = 0 
+        failed_rows_info = []
+        empty_rows_info = [] # Will include partially processed rows for reprocessing
+        partially_processed_rows_info = []
+
         for i in range(total_rows):
-            cell_value = str(dataframe.iloc[i][column_name]).strip()
-            
-            if not cell_value:  # 空值
-                empty_count += 1
-                empty_rows.append(i + 1)  # 1-based行号
-            elif cell_value.startswith('错误:') or 'API调用失败' in cell_value:  # 失败标记
-                failed_count += 1
-                failed_rows.append(i + 1)
-            elif cell_value != '':  # 有内容且不是错误
-                processed_count += 1
-                
+            main_cell_value = str(dataframe.iloc[i].get(column_name, "")).strip()
+
+            if main_cell_value.startswith('错误:') or 'API调用失败' in main_cell_value:
+                current_failed_count += 1
+                failed_rows_info.append(i + 1)
+            elif not main_cell_value: # Main cell is completely empty
+                if not is_multi_field:
+                    current_empty_count += 1
+                    empty_rows_info.append(i + 1)
+                else: # Multi-field, main cell empty
+                    all_sub_fields_empty_for_this_row = True
+                    for field in output_fields:
+                        sub_col_name = f"{column_name}_{field}"
+                        if sub_col_name in dataframe.columns and str(dataframe.iloc[i].get(sub_col_name, "")).strip():
+                            all_sub_fields_empty_for_this_row = False
+                            break
+                    if all_sub_fields_empty_for_this_row:
+                        current_empty_count += 1
+                        empty_rows_info.append(i + 1)
+                    else:
+                        # Main empty, but some sub-fields have data. Odd case, count as processed.
+                        current_processed_count +=1
+            else: # Main cell has content and is not an explicit error
+                if not is_multi_field:
+                    current_processed_count += 1
+                else: # Multi-field: main cell has content
+                    any_sub_field_populated = False
+                    for field in output_fields:
+                        sub_col_name = f"{column_name}_{field}"
+                        if sub_col_name in dataframe.columns and str(dataframe.iloc[i].get(sub_col_name, "")).strip():
+                            any_sub_field_populated = True
+                            break
+                    
+                    if any_sub_field_populated:
+                        current_processed_count += 1
+                    else:
+                        # Main has content, but all sub-fields are empty.
+                        # This is "partially processed" and should be reprocessable via "empty".
+                        current_empty_count += 1
+                        empty_rows_info.append(i + 1)
+                        # Informational tracking for this specific state:
+                        partially_processed_count_info +=1
+                        partially_processed_rows_info.append(i+1)
+        
         return {
             'total_rows': total_rows,
-            'processed_count': processed_count,
-            'failed_count': failed_count,
-            'empty_count': empty_count,
-            'failed_rows': failed_rows,
-            'empty_rows': empty_rows,
-            'completion_rate': round((processed_count / total_rows * 100), 1) if total_rows > 0 else 0
+            'processed_count': current_processed_count,
+            'failed_count': current_failed_count,
+            'empty_count': current_empty_count, 
+            'partially_processed_count': partially_processed_count_info, # Informational
+            'failed_rows': failed_rows_info,
+            'empty_rows': empty_rows_info, # Includes rows from partially_processed_rows_info
+            'partially_processed_rows': partially_processed_rows_info, # Informational
+            'completion_rate': round((current_processed_count / total_rows * 100), 1) if total_rows > 0 else 0
         }
         
     def process_single_cell(self, dataframe, row_index, column_name, prompt_template, model=None, table_manager=None, output_fields=None):
@@ -108,6 +156,20 @@ class AIProcessor:
             # 替换模板中的变量（包括长文本列）
             prompt = self.replace_template_variables(prompt_template, row_data, row_index, table_manager)
             
+            # 检查prompt中是否包含空字段标记
+            if "{字段为空:" in prompt:
+                error_msg = f"Prompt包含空字段，无法处理: {prompt}"
+                print(f"处理第{row_index+1}行失败: {error_msg}")
+                dataframe.loc[row_index, column_name] = f"错误: {error_msg}"
+                return False, error_msg
+            
+            # 检查prompt中是否包含未找到字段标记
+            if "{未找到字段:" in prompt:
+                error_msg = f"Prompt包含未找到的字段: {prompt}"
+                print(f"处理第{row_index+1}行失败: {error_msg}")
+                dataframe.loc[row_index, column_name] = f"错误: {error_msg}"
+                return False, error_msg
+            
             # 使用指定模型或默认模型
             use_model = model if model else self.model
             
@@ -120,16 +182,57 @@ class AIProcessor:
             print(f"AI结果: {result}")
             
             # 处理多字段输出
-            if output_fields and len(output_fields) > 0:
-                success, parsed_results = self.parse_multi_field_response(result, output_fields, column_name)
+            # 检查是否为多字段模式（可能是预定义字段或自动解析）
+            is_multi_mode = False
+            field_mode = "predefined"
+            if table_manager:
+                ai_config = table_manager.get_ai_columns().get(column_name, {})
+                if isinstance(ai_config, dict):
+                    output_mode = ai_config.get("output_mode", "single")
+                    field_mode = ai_config.get("field_mode", "predefined")
+                    is_multi_mode = (output_mode == "multi")
+            
+            # 如果是多字段模式（预定义字段模式需要有字段，自动解析模式不需要）
+            if is_multi_mode and (output_fields or field_mode == "auto_parse"):
+                
+                success, parsed_results = self.parse_multi_field_response(result, output_fields, column_name, field_mode)
+                
+                # 添加调试信息
+                print(f"DEBUG: Multi-field parsing - Column: {column_name}")
+                print(f"DEBUG: Field mode: {field_mode}")
+                print(f"DEBUG: Expected fields: {output_fields}")
+                print(f"DEBUG: AI Response: {result[:500]}...")
+                print(f"DEBUG: Parse success: {success}")
+                print(f"DEBUG: Parsed results: {parsed_results}")
+                
                 if success:
+                    # 对于自动解析模式，需要动态创建字段列
+                    if field_mode == "auto_parse":
+                        # 使用解析出的字段名作为实际字段
+                        actual_fields = list(parsed_results.keys())
+                        if table_manager:
+                            table_manager.ensure_multi_field_columns_positioned(column_name, actual_fields)
+                    else:
+                        # 预定义模式，使用预设字段
+                        if table_manager:
+                            table_manager.ensure_multi_field_columns_positioned(column_name, output_fields)
+                    
                     # 创建/更新多个列
+                    print(f"DEBUG: Starting to update {len(parsed_results)} field columns")
                     for field_name, field_value in parsed_results.items():
                         full_column_name = f"{column_name}_{field_name}"
-                        # 确保列存在
+                        print(f"DEBUG: Processing field '{field_name}' -> column '{full_column_name}' with value '{field_value}'")
+                        
+                        # 确保列存在（如果table_manager不可用，回退到原方法）
                         if full_column_name not in dataframe.columns:
+                            print(f"DEBUG: Creating new column '{full_column_name}'")
                             dataframe[full_column_name] = ""
+                        else:
+                            print(f"DEBUG: Column '{full_column_name}' already exists")
+                            
+                        # 更新单元格值
                         dataframe.loc[row_index, full_column_name] = field_value
+                        print(f"DEBUG: Updated cell [{row_index}, {full_column_name}] = '{field_value}'")
                     
                     # 在主列中存储原始响应（可选）
                     dataframe.loc[row_index, column_name] = result
@@ -322,7 +425,13 @@ class AIProcessor:
                     return f"{{长文本列内容获取失败: {var_name}}}"
             
             # 普通字段替换
-            return str(row_data.get(var_name, f"{{未找到字段: {var_name}}}"))
+            field_value = row_data.get(var_name, f"{{未找到字段: {var_name}}}")
+            
+            # 检查字段值是否为空
+            if not field_value or str(field_value).strip() == '':
+                return f"{{字段为空: {var_name}}}"
+            
+            return str(field_value)
             
         return re.sub(r'\{(\w+)\}', replace_var, template)
         
@@ -373,45 +482,77 @@ class AIProcessor:
         except Exception as e:
             return False, str(e)
 
-    def parse_multi_field_response(self, response, expected_fields, column_name):
+    def parse_multi_field_response(self, response, expected_fields, column_name, field_mode="predefined"):
         """解析多字段JSON响应"""
         try:
             import json
             import re
             
+            print(f"DEBUG: parse_multi_field_response called")
+            print(f"DEBUG: Original response: {response}")
+            print(f"DEBUG: Expected fields: {expected_fields}")
+            print(f"DEBUG: Field mode: {field_mode}")
+            
             # 清理响应文本，提取JSON部分
             cleaned_response = self.extract_json_from_response(response)
+            print(f"DEBUG: Cleaned response: {cleaned_response}")
             
             # 尝试解析JSON
             try:
                 parsed_data = json.loads(cleaned_response)
+                print(f"DEBUG: Parsed JSON data: {parsed_data}")
             except json.JSONDecodeError as e:
+                print(f"DEBUG: JSON parse error: {str(e)}")
                 return False, f"JSON格式错误: {str(e)}"
             
             # 检查是否为字典
             if not isinstance(parsed_data, dict):
                 return False, "响应不是JSON对象格式"
             
-            # 提取期望的字段
             result = {}
-            missing_fields = []
             
-            for field in expected_fields:
-                if field in parsed_data:
-                    result[field] = str(parsed_data[field]).strip()
-                else:
-                    missing_fields.append(field)
-            
-            if missing_fields:
-                # 部分字段缺失，但尝试使用可用的字段
-                print(f"警告: 缺失字段 {missing_fields}，但继续使用可用字段")
-                for field in missing_fields:
-                    result[field] = "[字段缺失]"
-            
-            if not result:
-                return False, "没有找到任何期望的字段"
+            if field_mode == "auto_parse":
+                # 自动解析模式：提取JSON中的所有字段
+                print(f"DEBUG: Auto-parse mode, processing {len(parsed_data)} fields")
+                for key, value in parsed_data.items():
+                    # 过滤掉空值和无效字段
+                    if value is not None and str(value).strip():
+                        result[key] = str(value).strip()
+                        print(f"DEBUG: Added field '{key}': '{result[key]}'")
+                    else:
+                        print(f"DEBUG: Skipped empty field '{key}': '{value}'")
                 
-            return True, result
+                if not result:
+                    print(f"DEBUG: No valid fields found in auto-parse mode")
+                    return False, "JSON中没有找到有效字段"
+                    
+                print(f"DEBUG: Auto-parse result: {result}")
+                return True, result
+            else:
+                # 预定义字段模式：只提取期望的字段
+                print(f"DEBUG: Predefined mode, looking for fields: {expected_fields}")
+                missing_fields = []
+                
+                for field in expected_fields:
+                    if field in parsed_data:
+                        result[field] = str(parsed_data[field]).strip()
+                        print(f"DEBUG: Found field '{field}': '{result[field]}'")
+                    else:
+                        missing_fields.append(field)
+                        print(f"DEBUG: Missing field '{field}'")
+                
+                if missing_fields:
+                    # 部分字段缺失，但尝试使用可用的字段
+                    print(f"警告: 缺失字段 {missing_fields}，但继续使用可用字段")
+                    for field in missing_fields:
+                        result[field] = "[字段缺失]"
+                
+                if not result:
+                    print(f"DEBUG: No expected fields found in predefined mode")
+                    return False, "没有找到任何期望的字段"
+                    
+                print(f"DEBUG: Predefined result: {result}")
+                return True, result
             
         except Exception as e:
             return False, f"解析异常: {str(e)}"

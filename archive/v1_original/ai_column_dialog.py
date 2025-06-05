@@ -184,7 +184,7 @@ class AIColumnDialog:
         
         ttk.Label(concurrent_frame, text="并发数:").pack(side=tk.LEFT, padx=(0, 10))
         self.max_workers_var = tk.IntVar(value=3)
-        max_workers_spinbox = ttk.Spinbox(concurrent_frame, from_=1, to=10, 
+        max_workers_spinbox = ttk.Spinbox(concurrent_frame, from_=1, to=999, 
                                          textvariable=self.max_workers_var, width=5)
         max_workers_spinbox.pack(side=tk.LEFT)
         ttk.Label(concurrent_frame, text="  (同时处理的任务数，建议1-5)", 
@@ -522,8 +522,8 @@ class AIColumnDialog:
             
         # 验证处理参数
         max_workers = self.max_workers_var.get()
-        if max_workers < 1 or max_workers > 10:
-            messagebox.showerror("错误", "并发数必须在1-10之间")
+        if max_workers < 1:
+            messagebox.showerror("错误", "并发数必须大于等于1")
             return False
             
         request_delay = self.request_delay_var.get()

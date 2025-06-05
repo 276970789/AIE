@@ -14,6 +14,7 @@ class TableManager:
         self.dataframe = None
         self.ai_columns = {}  # {column_name: {"prompt": prompt_template, "model": model_name}}
         self.long_text_columns = {}  # {column_name: {"filename_field": field, "folder_path": path, "preview_length": length}}
+        self.hidden_columns = set()  # 隐藏的列名集合
         self.file_path = None
         self.changes_made = False # 添加标志，追踪是否有未保存的更改
         
@@ -137,7 +138,7 @@ class TableManager:
             return list(self.dataframe.columns)
         return []
         
-    def add_ai_column(self, column_name, prompt_template, model="gpt-4.1", processing_params=None, output_mode="single", output_fields=None, preserve_data=False):
+    def add_ai_column(self, column_name, prompt_template, model="gpt-4.1", processing_params=None, output_mode="single", output_fields=None, field_mode="predefined", preserve_data=False):
         """添加AI列"""
         if self.dataframe is not None:
             # 添加主列到数据框（如果不存在）
@@ -147,14 +148,42 @@ class TableManager:
                 # 如果列已存在且不保留数据，则清空
                 self.dataframe[column_name] = ''
             
-            # 如果是多字段模式，创建对应的字段列
+            # 如果是多字段模式，创建对应的字段列（紧挨着主列）
             if output_mode == "multi" and output_fields:
+                # 获取主列的位置
+                columns = list(self.dataframe.columns)
+                main_col_index = columns.index(column_name)
+                
+                # 准备要插入的新列
+                new_columns_to_add = []
                 for field_name in output_fields:
                     full_column_name = f"{column_name}_{field_name}"
                     if full_column_name not in self.dataframe.columns:
-                        self.dataframe[full_column_name] = ''
+                        new_columns_to_add.append(full_column_name)
                     elif not preserve_data:
                         self.dataframe[full_column_name] = ''
+                
+                # 如果有新列需要添加，按顺序插入到主列右边
+                if new_columns_to_add:
+                    # 为新列添加空数据
+                    for col_name in new_columns_to_add:
+                        self.dataframe[col_name] = ''
+                    
+                    # 重新排列列的顺序，将新列放在主列右边
+                    new_column_order = []
+                    for i, col in enumerate(columns):
+                        new_column_order.append(col)
+                        if col == column_name:
+                            # 在主列后面插入所有字段列
+                            new_column_order.extend(new_columns_to_add)
+                    
+                    # 添加其他可能存在的列（如果有的话）
+                    for col in self.dataframe.columns:
+                        if col not in new_column_order:
+                            new_column_order.append(col)
+                    
+                    # 重新排列DataFrame的列
+                    self.dataframe = self.dataframe[new_column_order]
             
             # 默认处理参数
             default_params = {
@@ -172,7 +201,8 @@ class TableManager:
                 "model": model,
                 "processing_params": default_params,
                 "output_mode": output_mode,
-                "output_fields": output_fields or []
+                "output_fields": output_fields or [],
+                "field_mode": field_mode
             }
             self.changes_made = True # 添加AI列即视为有更改
             return True
@@ -271,6 +301,14 @@ class TableManager:
                 return config.get("output_fields", [])
         return []
         
+    def get_ai_column_field_mode(self, column_name):
+        """获取AI列的字段处理模式"""
+        if column_name in self.ai_columns:
+            config = self.ai_columns[column_name]
+            if isinstance(config, dict):
+                return config.get("field_mode", "predefined")
+        return "predefined"
+        
     def is_multi_field_ai_column(self, column_name):
         """检查是否为多字段AI列"""
         return (column_name in self.ai_columns and 
@@ -292,6 +330,54 @@ class TableManager:
         if self.dataframe is not None and column_name in self.dataframe.columns:
             self.dataframe.at[row_index, column_name] = value
             self.changes_made = True # 更新单元格值即视为有更改
+            
+    def ensure_multi_field_columns_positioned(self, main_column_name, field_names):
+        """确保多字段列在主列右边的正确位置"""
+        if self.dataframe is None or main_column_name not in self.dataframe.columns:
+            return
+            
+        columns = list(self.dataframe.columns)
+        main_col_index = columns.index(main_column_name)
+        
+        # 检查哪些字段列需要创建或重新定位
+        field_columns = [f"{main_column_name}_{field}" for field in field_names]
+        columns_to_reposition = []
+        
+        for field_col in field_columns:
+            if field_col not in self.dataframe.columns:
+                # 创建新列
+                self.dataframe[field_col] = ''
+                columns_to_reposition.append(field_col)
+            else:
+                # 检查现有列是否在正确位置
+                current_index = columns.index(field_col)
+                expected_start = main_col_index + 1
+                expected_end = main_col_index + len(field_columns)
+                if not (expected_start <= current_index <= expected_end):
+                    columns_to_reposition.append(field_col)
+        
+        # 如果需要重新定位列
+        if columns_to_reposition:
+            # 重新排列列的顺序
+            new_column_order = []
+            
+            # 添加主列之前的所有列
+            for col in columns:
+                if col == main_column_name:
+                    new_column_order.append(col)
+                    # 在主列后面添加所有字段列
+                    new_column_order.extend(field_columns)
+                elif col not in field_columns:
+                    new_column_order.append(col)
+            
+            # 添加任何新创建的列
+            for col in self.dataframe.columns:
+                if col not in new_column_order:
+                    new_column_order.append(col)
+            
+            # 重新排列DataFrame
+            self.dataframe = self.dataframe[new_column_order]
+            self.changes_made = True
             
     def get_row_data(self, row_index):
         """获取指定行的数据"""
@@ -409,8 +495,8 @@ class TableManager:
             print(f"AI列不存在: {column_name}")
             return False
     
-    def update_ai_column_config(self, column_name, new_prompt, new_model, processing_params=None):
-        """更新AI列配置（包含模型信息和处理参数）"""
+    def update_ai_column_config(self, column_name, new_prompt, new_model, processing_params=None, output_mode=None, output_fields=None, field_mode=None):
+        """更新AI列配置（包含模型信息、处理参数、输出模式和字段）"""
         if column_name in self.ai_columns:
             config = self.ai_columns[column_name]
             
@@ -425,10 +511,32 @@ class TableManager:
                         'max_retries': 2
                     }
             
+            # 保留现有的输出模式和字段或使用新的
+            if output_mode is None:
+                if isinstance(config, dict):
+                    output_mode = config.get("output_mode", "single")
+                else:
+                    output_mode = "single"
+            
+            if output_fields is None:
+                if isinstance(config, dict):
+                    output_fields = config.get("output_fields", [])
+                else:
+                    output_fields = []
+            
+            if field_mode is None:
+                if isinstance(config, dict):
+                    field_mode = config.get("field_mode", "predefined")
+                else:
+                    field_mode = "predefined"
+            
             self.ai_columns[column_name] = {
                 "prompt": new_prompt,
                 "model": new_model,
-                "processing_params": processing_params
+                "processing_params": processing_params,
+                "output_mode": output_mode,
+                "output_fields": output_fields or [],
+                "field_mode": field_mode
             }
             self.changes_made = True
             
@@ -460,7 +568,7 @@ class TableManager:
                 return True
         return False
             
-    def insert_column_at_position(self, position, column_name, prompt_template=None, is_ai_column=False, ai_model="gpt-4.1", processing_params=None, output_mode="single", output_fields=None):
+    def insert_column_at_position(self, position, column_name, prompt_template=None, is_ai_column=False, ai_model="gpt-4.1", processing_params=None, output_mode="single", output_fields=None, field_mode="predefined"):
         """在指定位置插入列"""
         if self.dataframe is not None:
             try:
@@ -496,7 +604,8 @@ class TableManager:
                         "model": ai_model,
                         "processing_params": default_params,
                         "output_mode": output_mode or "single",
-                        "output_fields": output_fields or []
+                        "output_fields": output_fields or [],
+                        "field_mode": field_mode
                     }
                     
                 self.changes_made = True # 插入列即视为有更改
@@ -762,6 +871,48 @@ class TableManager:
     def has_unsaved_changes(self):
         """检查是否有未保存的更改"""
         return self.changes_made
+    
+    def hide_column(self, column_name):
+        """隐藏列"""
+        if self.dataframe is not None and column_name in self.dataframe.columns:
+            self.hidden_columns.add(column_name)
+            self.changes_made = True
+            return True
+        return False
+    
+    def show_column(self, column_name):
+        """显示列"""
+        if column_name in self.hidden_columns:
+            self.hidden_columns.remove(column_name)
+            self.changes_made = True
+            return True
+        return False
+    
+    def is_column_hidden(self, column_name):
+        """检查列是否被隐藏"""
+        return column_name in self.hidden_columns
+    
+    def get_hidden_columns(self):
+        """获取隐藏的列名列表"""
+        return list(self.hidden_columns)
+    
+    def get_visible_columns(self):
+        """获取可见的列名列表"""
+        if self.dataframe is not None:
+            return [col for col in self.dataframe.columns if col not in self.hidden_columns]
+        return []
+    
+    def get_hidden_columns_count(self):
+        """获取隐藏列的数量"""
+        return len(self.hidden_columns)
+    
+    def show_all_columns(self):
+        """显示所有列"""
+        if self.hidden_columns:
+            self.hidden_columns.clear()
+            self.changes_made = True
+            return True
+        return False
         
     def import_from_jsonl(self, match_field, source_field, column_name, jsonl_df, position=None):
         """从JSONL数据导入到新列. 若提供position, 则在该位置插入,否则追加到末尾."""

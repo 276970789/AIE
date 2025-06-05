@@ -167,48 +167,48 @@ class AIExcelApp:
                        selectbackground='#dbeafe',  # 浅蓝色选中背景
                        selectforeground='#1e40af',  # 深蓝色选中文字
                        fieldbackground='#ffffff',
-                       bordercolor='#9ca3af',  # 更深的边框颜色
-                       borderwidth=1,  # 边框宽度
+                       bordercolor='#6b7280',  # 更深的边框颜色，增强可见性
+                       borderwidth=2,  # 增加边框宽度
                        font=('Arial', 10), # 改为 Arial
                        rowheight=self.row_height_settings[self.current_row_height],  # 动态行高
                        relief='solid')  # 边框样式
                        
         style.configure('Modern.Treeview.Heading',
-                       background='#f8fafc',  # 列头背景
+                       background='#f1f5f9',  # 稍微深一点的列头背景
                        foreground='#000000',  # 纯黑色列头文字
                        font=('Arial', 10, 'bold'), # 改为 Arial
-                       bordercolor='#cbd5e1',  # 列头边框
-                       borderwidth=1,  # 边框宽度
+                       bordercolor='#64748b',  # 更深的列头边框
+                       borderwidth=2,  # 增加边框宽度
                        relief='solid',
                        padding=(8, 6))
         
         # 为AI列头定义特定样式
         style.configure('AI.Treeview.Heading',
-                       background='#e3f2fd',  # 浅蓝色背景
+                       background='#dbeafe',  # 更明显的蓝色背景
                        foreground='#1a202c',  # 深色文字
                        font=('Arial', 10, 'bold'),
-                       bordercolor='#90caf9',
-                       borderwidth=1,
+                       bordercolor='#3b82f6',  # 蓝色边框
+                       borderwidth=2,
                        relief='solid',
                        padding=(8, 6))
                        
         # 为普通列头定义特定样式
         style.configure('Normal.Treeview.Heading',
-                       background='#f8fafc',  # 浅灰白色背景
+                       background='#f1f5f9',  # 浅灰白色背景
                        foreground='#000000',  # 纯黑色文字
                        font=('Arial', 10, 'bold'),
-                       bordercolor='#cbd5e1',
-                       borderwidth=1,
+                       bordercolor='#64748b',  # 深灰色边框
+                       borderwidth=2,
                        relief='solid',
                        padding=(8, 6))
         
         # 为长文本列头定义特定样式
         style.configure('LongText.Treeview.Heading',
-                       background='#f0f4f8',  # Example: A slightly different light blue/gray
+                       background='#f0fdf4',  # 浅绿色背景
                        foreground='#000000',
                        font=('Arial', 10, 'bold'),
-                       bordercolor='#cbd5e1',
-                       borderwidth=1,
+                       bordercolor='#22c55e',  # 绿色边框
+                       borderwidth=2,
                        relief='solid',
                        padding=(8, 6))
         
@@ -217,10 +217,9 @@ class AIExcelApp:
                  background=[('selected', '#dbeafe')],
                  foreground=[('selected', '#1e40af')])
         
-        # 配置Treeview布局 - 添加网格线效果
+        # 配置Treeview布局 - 增强网格线效果
         style.layout('Modern.Treeview', [
-            ('Treeview.treearea', {'sticky': 'nswe'}),
-            ('Treeview.border', {'sticky': 'nswe', 'border': '1', 'children': [
+            ('Treeview.border', {'sticky': 'nswe', 'border': '2', 'children': [
                 ('Treeview.padding', {'sticky': 'nswe', 'children': [
                     ('Treeview.treearea', {'sticky': 'nswe'})
                 ]})
@@ -235,6 +234,8 @@ class AIExcelApp:
                        selectforeground='#1e40af',
                        fieldbackground='#f0f8ff',
                        font=('Arial', 10),
+                       bordercolor='#6b7280',  # 保持一致的边框
+                       borderwidth=2,
                        rowheight=self.row_height_settings[self.current_row_height])
         
     def create_menu(self):
@@ -306,11 +307,16 @@ class AIExcelApp:
         data_menu.add_command(label="↶ 撤销", command=self.undo_action, accelerator="Ctrl+Z")
         data_menu.add_separator()
         data_menu.add_command(label="🔍 查找和替换", command=self.show_find_replace, accelerator="Ctrl+H")
+        data_menu.add_command(label="🎲 随机导出", command=self.show_random_export_dialog)
         data_menu.add_command(label="🧹 清空所有数据", command=self.clear_data)
         
         # 视图菜单
         view_menu = tk.Menu(menubar, tearoff=0)
         menubar.add_cascade(label="👁️ 视图", menu=view_menu)
+        
+        # 刷新功能
+        view_menu.add_command(label="🔄 刷新表格", command=self.manual_refresh_table, accelerator="F4")
+        view_menu.add_separator()
         
         # 排序操作
         sort_submenu = tk.Menu(view_menu, tearoff=0)
@@ -325,6 +331,11 @@ class AIExcelApp:
         filter_submenu.add_command(label="❌ 清除筛选", command=self.clear_filter)
         filter_submenu.add_separator()
         filter_submenu.add_command(label="💡 右键列标题选择筛选", state='disabled')
+        
+        view_menu.add_separator()
+        
+        # 隐藏列管理
+        view_menu.add_command(label="👁️‍🗨️ 管理隐藏列", command=self.show_hidden_columns_manager, accelerator="Ctrl+Shift+H")
         
         view_menu.add_separator()
         
@@ -354,9 +365,11 @@ class AIExcelApp:
         self.root.bind_all('<Control-Alt-e>', lambda e: self.show_conditional_export())
         self.root.bind_all('<Control-h>', lambda e: self.show_find_replace())
         self.root.bind_all('<Control-Shift-E>', lambda e: self.quick_export_excel())
+        self.root.bind_all('<F4>', lambda e: self.manual_refresh_table())
         self.root.bind_all('<F5>', lambda e: self.process_all_ai())
         self.root.bind_all('<F6>', lambda e: self.process_single_column())
         self.root.bind_all('<F7>', lambda e: self.process_single_cell())
+        self.root.bind_all('<Control-Shift-H>', lambda e: self.show_hidden_columns_manager())
         
     def create_toolbar(self):
         """创建工具栏区域 - 现在用于预览面板"""
@@ -465,6 +478,18 @@ class AIExcelApp:
                                           style='Modern.TLabelframe', padding=16)
         # 初始时不显示，将在有数据时显示
         
+        # 顶部控制栏 - 包含prompt显示开关
+        top_control_frame = ttk.Frame(self.preview_panel, style='Modern.TFrame')
+        top_control_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        # Prompt显示开关 - 放在右上角
+        self.show_prompt_var = tk.BooleanVar(value=True)  # 默认显示prompt
+        self.show_prompt_checkbox = ttk.Checkbutton(top_control_frame, 
+                                                   text="💬 显示Prompt", 
+                                                   variable=self.show_prompt_var, 
+                                                   command=self.toggle_prompt_display)
+        self.show_prompt_checkbox.pack(side=tk.RIGHT)
+        
         # 水平布局：左侧信息，右侧内容，最右侧按钮
         left_info_frame = ttk.Frame(self.preview_panel, style='Modern.TFrame')
         left_info_frame.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 15))
@@ -526,8 +551,9 @@ class AIExcelApp:
                                                         command=self.toggle_full_prompt_display)
         self.show_full_prompt_checkbox.pack(anchor=tk.E, pady=(5,0))
         
-        # 初始状态隐藏Prompt预览
-        self.prompt_preview_frame.pack_forget()
+        # 初始状态根据开关决定是否显示Prompt预览
+        if not self.show_prompt_var.get():
+            self.prompt_preview_frame.pack_forget()
         
         # 操作按钮 - 垂直排列在右侧
         button_frame = ttk.Frame(self.preview_panel, style='Modern.TFrame')
@@ -545,8 +571,13 @@ class AIExcelApp:
         self.copy_button.pack(pady=3)
         
         self.clear_button = ttk.Button(button_frame, text="🗑️清空", 
-                                      command=self.clear_preview, state='disabled', width=8)
+                                     command=self.clear_preview, state='disabled', width=8)
         self.clear_button.pack(pady=3)
+        
+        # 刷新按钮
+        self.refresh_button = ttk.Button(button_frame, text="🔄刷新", 
+                                       command=self.manual_refresh_table, width=8)
+        self.refresh_button.pack(pady=3)
         
         # 初始状态显示
         self.preview_text.insert("1.0", "选择一个单元格来查看其内容...")
@@ -571,32 +602,26 @@ class AIExcelApp:
                     model = config.get("model", "gpt-4.1")
                     self.cell_type_label.config(text=f"AI列 ({model})", foreground="blue")
                     
-                    # 显示Prompt预览区域
-                    self.prompt_preview_frame.pack(fill=tk.BOTH, expand=True, pady=(10, 0))
+                    # 根据prompt显示开关决定是否显示Prompt预览区域
+                    if self.show_prompt_var.get():
+                        self.prompt_preview_frame.pack(fill=tk.BOTH, expand=True, pady=(10, 0))
                     
-                    # 构建并显示完整Prompt
-                    full_prompt = self.ai_processor.build_full_prompt(row_index, col_name, self.table_manager)
-                    self.prompt_text.config(state='normal')
-                    self.prompt_text.delete("1.0", tk.END)
-                    self.prompt_text.insert("1.0", full_prompt)
-                    self.prompt_text.config(state='disabled')
-                    
-                    # 重置开关状态，默认不显示完整prompt，但框显示
+                    # 重置开关状态，默认不显示完整prompt
                     self.show_full_prompt_var.set(False)
-                    self.toggle_full_prompt_display() # 根据初始值设置显示状态
                     self.show_full_prompt_checkbox.config(state='normal')
+                    
+                    # 更新prompt内容
+                    self.update_prompt_content()
 
                 else:
                     self.cell_type_label.config(text="AI列 (gpt-4.1)", foreground="blue")
-                    # 如果是旧格式，也显示Prompt预览，但只显示prompt template
-                    self.prompt_preview_frame.pack(fill=tk.BOTH, expand=True, pady=(10, 0))
-                    self.prompt_text.config(state='normal')
-                    self.prompt_text.delete("1.0", tk.END)
-                    self.prompt_text.insert("1.0", self.table_manager.get_ai_column_prompt(col_name))
-                    self.prompt_text.config(state='disabled')
+                    # 如果是旧格式，根据prompt显示开关决定是否显示Prompt预览
+                    if self.show_prompt_var.get():
+                        self.prompt_preview_frame.pack(fill=tk.BOTH, expand=True, pady=(10, 0))
                     self.show_full_prompt_var.set(False)
-                    self.toggle_full_prompt_display()
                     self.show_full_prompt_checkbox.config(state='normal')
+                    # 更新prompt内容
+                    self.update_prompt_content()
 
             else:
                 self.cell_type_label.config(text="普通列", foreground="gray")
@@ -962,13 +987,24 @@ class AIExcelApp:
                 command=lambda: self.delete_specific_column(col_name)
             )
             
+            context_menu.add_separator()
+            
+            # 隐藏列选项
+            context_menu.add_command(
+                label="👁️‍🗨️ 隐藏此列",
+                command=lambda: self.hide_column(col_name)
+            )
+            
         elif self.selection_info['type'] == 'cell':
             # 选中单元格的菜单
             row_index = self.selection_info['row_index']
             col_name = self.selection_info['column_name']
+            col_index = self.selection_info['column_index']
             ai_columns = self.table_manager.get_ai_columns()
             is_ai_cell = col_name in ai_columns
+            is_ai_col = col_name in ai_columns
             cell_type = "AI单元格" if is_ai_cell else "单元格"
+            col_type = "AI列" if is_ai_col else "普通列"
             
             # 单元格标题
             context_menu.add_command(
@@ -1011,6 +1047,99 @@ class AIExcelApp:
                 command=lambda: self.delete_selected_row(row_index)
             )
             
+            # 添加列操作子菜单
+            context_menu.add_separator()
+            col_submenu = tk.Menu(context_menu, tearoff=0)
+            context_menu.add_cascade(label=f"📊 {col_type}操作", menu=col_submenu)
+            
+            # 列编辑操作
+            col_submenu.add_command(
+                label="✏️ 编辑列名",
+                command=lambda: self.edit_column_name(col_name)
+            )
+            
+            if is_ai_col:
+                col_submenu.add_command(
+                    label="🤖 编辑AI功能",
+                    command=lambda: self.edit_ai_prompt(col_name)
+                )
+                col_submenu.add_separator()
+                
+                # AI处理操作
+                col_submenu.add_command(
+                    label="📊 查看处理进度",
+                    command=lambda: self.show_ai_column_progress(col_name)
+                )
+                col_submenu.add_command(
+                    label="⚡ AI处理整列(新版)",
+                    command=lambda: self.process_ai_column_concurrent(col_name)
+                )
+                col_submenu.add_command(
+                    label="⚡ AI处理整列(旧版)",
+                    command=lambda: self.process_entire_column(col_name)
+                )
+                col_submenu.add_separator()
+                
+                col_submenu.add_command(
+                    label="📝 转换为普通列",
+                    command=lambda: self.convert_to_normal_column(col_name)
+                )
+            
+            col_submenu.add_separator()
+            
+            # 筛选操作
+            col_submenu.add_command(
+                label="🔍 筛选数据",
+                command=lambda: self.show_filter_dialog(col_name)
+            )
+            if self.filter_state['active'] and self.filter_state['column'] == col_name:
+                col_submenu.add_command(
+                    label="❌ 清除筛选",
+                    command=self.clear_filter
+                )
+            
+            col_submenu.add_separator()
+            
+            # 排序操作
+            sort_submenu = tk.Menu(col_submenu, tearoff=0)
+            col_submenu.add_cascade(label="🔄 排序", menu=sort_submenu)
+            sort_submenu.add_command(
+                label="↑ 升序排序",
+                command=lambda: self.sort_by_column(col_name, ascending=True)
+            )
+            sort_submenu.add_command(
+                label="↓ 降序排序", 
+                command=lambda: self.sort_by_column(col_name, ascending=False)
+            )
+            if self.sort_state['column'] is not None:
+                sort_submenu.add_separator()
+                sort_submenu.add_command(
+                    label="🔄 重置排序",
+                    command=self.reset_sort
+                )
+            
+            # 列操作
+            col_submenu.add_command(
+                label="➕ 左侧插入列",
+                command=lambda: self.insert_column_at_position(col_index, "left")
+            )
+            col_submenu.add_command(
+                label="➕ 右侧插入列", 
+                command=lambda: self.insert_column_at_position(col_index + 1, "right")
+            )
+            col_submenu.add_command(
+                label="🗑️ 删除此列",
+                command=lambda: self.delete_specific_column(col_name)
+            )
+            
+            col_submenu.add_separator()
+            
+            # 隐藏列选项
+            col_submenu.add_command(
+                label="👁️‍🗨️ 隐藏此列",
+                command=lambda: self.hide_column(col_name)
+            )
+            
         else:
             # 未选中或空白区域的菜单
             context_menu.add_command(label="📊 表格操作", state='disabled')
@@ -1028,6 +1157,15 @@ class AIExcelApp:
                     label="🔄 重置排序",
                     command=self.reset_sort
                 )
+        
+        # 隐藏列管理（在所有菜单中都显示）
+        hidden_count = self.table_manager.get_hidden_columns_count()
+        if hidden_count > 0:
+            context_menu.add_separator()
+            context_menu.add_command(
+                label=f"👁️ 管理隐藏列 ({hidden_count})",
+                command=self.show_hidden_columns_manager
+            )
         
         try:
             context_menu.tk_popup(event.x_root, event.y_root)
@@ -1108,233 +1246,101 @@ class AIExcelApp:
         dialog.bind('<Escape>', lambda e: on_cancel())
         
     def edit_ai_prompt(self, col_name):
-        """编辑AI提示词 - 使用和新建相同的界面"""
+        """编辑AI提示词 - 使用统一的AI列对话框"""
         ai_columns = self.table_manager.get_ai_columns()
         if col_name not in ai_columns:
             messagebox.showwarning("警告", f"'{col_name}' 不是AI列")
             return
             
-        # 获取当前配置
-        config = ai_columns[col_name]
-        if isinstance(config, dict):
-            current_prompt = config.get("prompt", "")
-            current_model = config.get("model", "gpt-4.1")
-            current_params = config.get("processing_params", {
-                'max_workers': 3,
-                'request_delay': 0.5,
-                'max_retries': 2
-            })
-        else:
-            # 向后兼容旧格式
-            current_prompt = config
-            current_model = "gpt-4.1"
-            current_params = {
-                'max_workers': 3,
-                'request_delay': 0.5,
-                'max_retries': 2
-            }
+        # 获取当前完整配置，确保所有字段都存在
+        current_config = ai_columns[col_name]
         
-        # 使用 AI 列对话框的相似设计，但预填充现有数据
+        # Prepare edit_config with all necessary keys and defaults from current_config
+        edit_config = {
+            "prompt": self.table_manager.get_ai_column_prompt(col_name),
+            "model": self.table_manager.get_ai_column_model(col_name),
+            "output_mode": self.table_manager.get_ai_column_output_mode(col_name),
+            "output_fields": self.table_manager.get_ai_column_output_fields(col_name), # Crucial
+            "field_mode": self.table_manager.get_ai_column_field_mode(col_name),       # Crucial
+            "processing_params": self.table_manager.get_ai_column_processing_params(col_name)
+        }
+        
+        # 使用统一的AI列对话框
         from ai_column_dialog import AIColumnDialog
         
-        # 创建对话框
-        dialog = tk.Toplevel(self.root)
-        dialog.title(f"编辑AI列配置 - {col_name}")
-        dialog.geometry("700x700")  # 增加高度以容纳处理参数
-        dialog.resizable(True, True)
-        dialog.transient(self.root)
-        dialog.grab_set()
+        existing_columns = self.table_manager.get_column_names()
+        dialog = AIColumnDialog(self.root, existing_columns, 
+                               edit_mode=True, edit_column_name=col_name, edit_config=edit_config)
+        result = dialog.show()
         
-        # 居中显示
-        dialog.update_idletasks()
-        x = (dialog.winfo_screenwidth() // 2) - (700 // 2)
-        y = (dialog.winfo_screenheight() // 2) - (700 // 2)
-        dialog.geometry(f"700x700+{x}+{y}")
-        
-        # 主框架
-        main_frame = ttk.Frame(dialog, padding="10")
-        main_frame.pack(fill=tk.BOTH, expand=True)
-        
-        # 列名显示（不可编辑）
-        ttk.Label(main_frame, text="列名:").pack(anchor=tk.W, pady=(0, 5))
-        column_name_display = ttk.Label(main_frame, text=col_name, style='Subtitle.TLabel', 
-                                       background='#f8f9fa', relief='solid', padding=5)
-        column_name_display.pack(fill=tk.X, pady=(0, 10))
-        
-        # AI模型选择
-        model_config_frame = ttk.Frame(main_frame)
-        model_config_frame.pack(fill=tk.X, pady=(0, 10))
-        
-        ttk.Label(model_config_frame, text="AI模型:").pack(side=tk.LEFT, padx=(0, 10))
-        model_var = tk.StringVar(value=current_model)
-        model_combo = ttk.Combobox(model_config_frame, textvariable=model_var, 
-                                  values=["gpt-4.1", "o1"], state="readonly", width=15)
-        model_combo.pack(side=tk.LEFT)
-        
-        # 模型说明
-        ttk.Label(model_config_frame, text="  (gpt-4.1: 快速响应 | o1: 深度推理)", 
-                 foreground="gray", font=('Arial', 8)).pack(side=tk.LEFT, padx=(10, 0))
-        
-        # 处理参数配置框架
-        params_frame = ttk.LabelFrame(main_frame, text="处理参数配置", padding="10")
-        params_frame.pack(fill=tk.X, pady=(0, 10))
-        
-        # 并发数设置
-        concurrent_frame = ttk.Frame(params_frame)
-        concurrent_frame.pack(fill=tk.X, pady=(0, 5))
-        
-        ttk.Label(concurrent_frame, text="并发数:").pack(side=tk.LEFT, padx=(0, 10))
-        max_workers_var = tk.IntVar(value=current_params.get('max_workers', 3))
-        max_workers_spinbox = ttk.Spinbox(concurrent_frame, from_=1, to=10, 
-                                         textvariable=max_workers_var, width=5)
-        max_workers_spinbox.pack(side=tk.LEFT)
-        ttk.Label(concurrent_frame, text="  (同时处理的任务数，建议1-5)", 
-                 foreground="gray", font=('Arial', 8)).pack(side=tk.LEFT, padx=(5, 0))
-        
-        # 请求延迟设置
-        delay_frame = ttk.Frame(params_frame)
-        delay_frame.pack(fill=tk.X, pady=(0, 5))
-        
-        ttk.Label(delay_frame, text="请求延迟:").pack(side=tk.LEFT, padx=(0, 10))
-        request_delay_var = tk.DoubleVar(value=current_params.get('request_delay', 0.5))
-        delay_spinbox = ttk.Spinbox(delay_frame, from_=0.1, to=5.0, increment=0.1,
-                                   textvariable=request_delay_var, width=5)
-        delay_spinbox.pack(side=tk.LEFT)
-        ttk.Label(delay_frame, text="秒  (避免API限流，建议0.3-1.0)", 
-                 foreground="gray", font=('Arial', 8)).pack(side=tk.LEFT, padx=(5, 0))
-        
-        # 重试次数设置
-        retry_frame = ttk.Frame(params_frame)
-        retry_frame.pack(fill=tk.X, pady=(0, 5))
-        
-        ttk.Label(retry_frame, text="重试次数:").pack(side=tk.LEFT, padx=(0, 10))
-        max_retries_var = tk.IntVar(value=current_params.get('max_retries', 2))
-        retry_spinbox = ttk.Spinbox(retry_frame, from_=0, to=5, 
-                                   textvariable=max_retries_var, width=5)
-        retry_spinbox.pack(side=tk.LEFT)
-        ttk.Label(retry_frame, text="  (API失败时的重试次数，建议1-3)", 
-                 foreground="gray", font=('Arial', 8)).pack(side=tk.LEFT, padx=(5, 0))
-        
-        # Prompt模板输入区域
-        prompt_frame = ttk.LabelFrame(main_frame, text="AI Prompt模板", padding="10")
-        prompt_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
-        
-        # 提示信息
-        tip_text = "在prompt中使用 {列名} 来引用其他字段的值\n例如: 请将以下{category}类的英文query翻译成中文：{query}"
-        ttk.Label(prompt_frame, text=tip_text, foreground="gray").pack(anchor=tk.W, pady=(0, 5))
-        
-        # 可用字段显示
-        existing_columns = [col for col in self.table_manager.get_column_names() if col != col_name]
-        if existing_columns:
-            fields_label = ttk.Label(prompt_frame, text="可用字段: (双击复制)", foreground="red")
-            fields_label.pack(anchor=tk.W, pady=(0, 5))
+        if result:
+            # 检查配置是否真的有变化
+            original_config = edit_config # The fully formed edit_config is the original for comparison
             
-            # 创建可选择的字段文本框
-            fields_frame = ttk.Frame(prompt_frame)
-            fields_frame.pack(fill=tk.X, pady=(0, 10))
-            
-            # 字段文本框 - 只读但可选择复制
-            fields_text = tk.Text(fields_frame, height=3, wrap=tk.WORD, 
-                                 background='#f8f9fa', relief='solid', borderwidth=1,
-                                 font=('Consolas', 9))
-            fields_text.pack(fill=tk.X)
-            
-            # 填充字段内容
-            fields_content = ""
-            fields_list = [f"{{{col}}}" for col in existing_columns]
-            
-            # 按行排列字段，每行最多4个
-            for i in range(0, len(fields_list), 4):
-                line_fields = fields_list[i:i+4]
-                fields_content += "  ".join(line_fields) + "\n"
-            
-            fields_text.insert("1.0", fields_content.strip())
-            fields_text.config(state=tk.DISABLED)
-            
-            # 添加双击复制功能
-            def on_field_double_click(event):
-                try:
-                    fields_text.config(state=tk.NORMAL)
-                    # 获取点击位置的字符
-                    index = fields_text.index(f"@{event.x},{event.y}")
-                    # 获取当前行
-                    line_start = fields_text.index(f"{index} linestart")
-                    line_end = fields_text.index(f"{index} lineend")
-                    line_text = fields_text.get(line_start, line_end)
-                    
-                    # 找到点击的字段
-                    import re
-                    fields_in_line = re.findall(r'\{[^}]+\}', line_text)
-                    if fields_in_line:
-                        # 简单选择第一个字段（或者可以改进为选择最接近的）
-                        selected_field = fields_in_line[0]
-                        dialog.clipboard_clear()
-                        dialog.clipboard_append(selected_field)
-                        messagebox.showinfo("复制成功", f"已复制字段: {selected_field}")
-                    fields_text.config(state=tk.DISABLED)
-                except:
-                    fields_text.config(state=tk.DISABLED)
-            
-            fields_text.bind("<Double-Button-1>", on_field_double_click)
-            
-            # 提示标签
-            tip_label = ttk.Label(fields_frame, text="💡 双击字段名可快速复制到剪贴板", 
-                                foreground="gray", font=('Arial', 8))
-            tip_label.pack(anchor=tk.W, pady=(2, 0))
-        
-        # Prompt文本框
-        prompt_text = tk.Text(prompt_frame, height=8, wrap=tk.WORD, width=80)
-        prompt_text.pack(fill=tk.BOTH, expand=True)
-        prompt_text.insert("1.0", current_prompt)
-        prompt_text.focus()
-        
-        # 滚动条
-        scrollbar = ttk.Scrollbar(prompt_frame, orient=tk.VERTICAL, command=prompt_text.yview)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        prompt_text.configure(yscrollcommand=scrollbar.set)
-        
-        # 按钮框架
-        button_frame = ttk.Frame(main_frame)
-        button_frame.pack(fill=tk.X, pady=(10, 0))
-        
-        def on_save():
-            new_prompt = prompt_text.get("1.0", tk.END).strip()
-            if not new_prompt:
-                messagebox.showwarning("警告", "提示词不能为空")
-                return
-                
-            # 验证提示词模板
-            is_valid, message = self.table_manager.validate_prompt_template(new_prompt)
-            if not is_valid:
-                result = messagebox.askyesno("模板验证", 
-                                           f"提示词模板可能有问题：{message}\n\n是否仍要保存？")
-                if not result:
-                    return
-            
-            # 获取处理参数
-            processing_params = {
-                'max_workers': max_workers_var.get(),
-                'request_delay': request_delay_var.get(),
-                'max_retries': max_retries_var.get()
+            new_dialog_result = result # Rename for clarity
+            new_config_from_dialog = {
+                "prompt": new_dialog_result['prompt'],
+                "model": new_dialog_result['model'],
+                "output_mode": new_dialog_result['output_mode'],
+                "output_fields": new_dialog_result['output_fields'],
+                "field_mode": new_dialog_result.get('field_mode', 'predefined'), # Ensure field_mode is read from dialog result
+                "processing_params": new_dialog_result['processing_params']
             }
-                    
-            # 更新AI列配置（包含模型信息和处理参数）
-            new_model = model_var.get()
-            self.table_manager.update_ai_column_config(col_name, new_prompt, new_model, processing_params)
-            self.update_title()  # 更新标题栏
-            self.update_status(f"已更新AI列配置: {col_name} (模型: {new_model})", "success")
-            messagebox.showinfo("成功", f"AI列配置已更新\n模型: {new_model}\n并发数: {processing_params['max_workers']}")
-            dialog.destroy()
-                
-        def on_cancel():
-            dialog.destroy()
             
-        ttk.Button(button_frame, text="保存配置", command=on_save).pack(side=tk.RIGHT, padx=(5, 0))
-        ttk.Button(button_frame, text="取消", command=on_cancel).pack(side=tk.RIGHT)
+            # 比较配置是否有变化
+            config_changed = False
+            
+            # 比较各个字段
+            if original_config["prompt"] != new_config_from_dialog["prompt"]:
+                config_changed = True
+            elif original_config["model"] != new_config_from_dialog["model"]:
+                config_changed = True
+            elif original_config["output_mode"] != new_config_from_dialog["output_mode"]:
+                config_changed = True
+            elif original_config["output_fields"] != new_config_from_dialog["output_fields"]:
+                config_changed = True
+            elif original_config["field_mode"] != new_config_from_dialog["field_mode"]:
+                config_changed = True
+            else:
+                # 比较处理参数
+                orig_params = original_config["processing_params"]
+                new_params = new_config_from_dialog["processing_params"]
+                if (orig_params.get("max_workers", 3) != new_params["max_workers"] or
+                    orig_params.get("request_delay", 0.5) != new_params["request_delay"] or
+                    orig_params.get("max_retries", 2) != new_params["max_retries"]):
+                    config_changed = True
+            
+            if config_changed:
+                # 只有在配置真的有变化时才更新，使用table_manager的方法来确保一致性
+                self.table_manager.update_ai_column_config(
+                    col_name, 
+                    new_config_from_dialog["prompt"], 
+                    new_config_from_dialog["model"],
+                    new_config_from_dialog["processing_params"],
+                    new_config_from_dialog["output_mode"],
+                    new_config_from_dialog["output_fields"],
+                    new_config_from_dialog["field_mode"] # Pass field_mode to update
+                )
+                
+                # 如果是多字段模式，确保字段列正确定位
+                if new_config_from_dialog["output_mode"] == "multi" and new_config_from_dialog["output_fields"]:
+                    self.table_manager.ensure_multi_field_columns_positioned(col_name, new_config_from_dialog["output_fields"])
+                
+                self.update_table_display()  # 更新表格显示以反映可能的列变化
+                self.update_title()  # 更新标题栏
+                
+                if new_config_from_dialog["output_mode"] == "multi":
+                    fields_text = f" (字段: {', '.join(new_config_from_dialog['output_fields'])})" if new_config_from_dialog['output_fields'] else ""
+                    self.update_status(f"已更新多字段AI列配置: {col_name} (模型: {new_dialog_result['model']}){fields_text}", "success")
+                    messagebox.showinfo("成功", f"多字段AI列配置已更新\n模型: {new_dialog_result['model']}\n字段数量: {len(new_config_from_dialog['output_fields'])}")
+                else:
+                    self.update_status(f"已更新AI列配置: {col_name} (模型: {new_dialog_result['model']})", "success")
+                    messagebox.showinfo("成功", f"AI列配置已更新\n模型: {new_dialog_result['model']}\n输出模式: {new_dialog_result['output_mode']}")
+            else:
+                # 配置没有变化，不做任何更新
+                self.update_status(f"AI列配置未修改: {col_name}", "info")
+                messagebox.showinfo("提示", "配置未发生变化，无需保存")
         
-        # 绑定快捷键
-        dialog.bind('<Control-Return>', lambda e: on_save())
-        dialog.bind('<Escape>', lambda e: on_cancel())
         
 
             
@@ -1389,15 +1395,20 @@ class AIExcelApp:
                 model = config.get("model", "gpt-4.1")
                 output_mode = config.get("output_mode", "single")
                 output_fields = config.get("output_fields", [])
+                field_mode = config.get("field_mode", "predefined")
             else:
                 # 向后兼容
                 prompt = config
                 model = "gpt-4.1"
                 output_mode = "single"
                 output_fields = []
+                field_mode = "predefined"
             
             # 处理单个单元格
             try:
+                # 对于多字段模式，传递output_fields（自动解析模式可以为空）
+                fields_to_pass = output_fields if output_mode == "multi" else None
+                
                 success, result = self.ai_processor.process_single_cell(
                     self.table_manager.get_dataframe(),
                     row_index,
@@ -1405,11 +1416,15 @@ class AIExcelApp:
                     prompt,
                     model,
                     self.table_manager,
-                    output_fields if output_mode == "multi" else None
+                    fields_to_pass
                 )
                 
                 if success:
+                    # 强制更新表格显示
                     self.update_table_display()
+                    # 强制刷新界面
+                    self.root.update_idletasks()
+                    
                     if output_mode == "multi" and isinstance(result, dict):
                         self.update_status(f"单元格 {col_name}[{row_index+1}] 多字段处理完成 (提取了 {len(result)} 个字段)", "success")
                     else:
@@ -1445,7 +1460,11 @@ class AIExcelApp:
             )
             
             if success:
+                # 强制更新表格显示
                 self.update_table_display()
+                # 强制刷新界面
+                self.root.update_idletasks()
+                
                 self.update_status(f"重新解析成功: {col_name}[{row_index+1}]", "success")
                 messagebox.showinfo("成功", f"重新解析成功！\n{result}")
             else:
@@ -2114,8 +2133,10 @@ class AIExcelApp:
             print(f"数据框大小: {df.shape}")
             print(f"列名: {list(df.columns)}")
             
-            # 设置列
-            columns = list(df.columns)
+            # 设置列 - 添加行号列，只显示可见的列
+            all_data_columns = list(df.columns)
+            visible_data_columns = self.table_manager.get_visible_columns()
+            columns = ["#"] + visible_data_columns  # 在前面添加行号列，只包含可见列
             self.tree["columns"] = columns
             self.tree["show"] = "headings"
             
@@ -2125,6 +2146,11 @@ class AIExcelApp:
             print(f"DEBUG: main.py - update_table_display - AI Columns: {ai_columns}") # Debug print
             print(f"DEBUG: main.py - update_table_display - Long Text Columns: {long_text_columns}") # Debug print
             for i, col in enumerate(columns):
+                # 特殊处理行号列
+                if col == "#":
+                    self.tree.heading("#", text="行号", anchor='center')
+                    self.tree.column("#", width=60, minwidth=50, anchor='center', stretch=False)
+                    continue
                 display_col_name = col
                 heading_style = 'Normal.Treeview.Heading'  # Default style
                 
@@ -2176,28 +2202,43 @@ class AIExcelApp:
                 
             # 插入数据并应用行样式
             for index, row in df.iterrows():
-                values = []
-                for val in row:
-                    # 处理长文本显示 - 增加显示长度
-                    str_val = str(val) if val is not None else ""
-                    if len(str_val) > 80:  # 增加显示长度
-                        str_val = str_val[:77] + "..."
-                    values.append(str_val)
+                # 计算实际行号（考虑筛选状态）
+                if self.filter_state['active'] and self.filter_state['filtered_indices']:
+                    actual_row_number = self.filter_state['filtered_indices'][index] + 1
+                else:
+                    actual_row_number = index + 1
+                
+                # 构建行数据，第一列是行号，只包含可见列的数据
+                values = [str(actual_row_number)]  # 行号列
+                for col_name in visible_data_columns:
+                    if col_name in df.columns:
+                        val = row[col_name]
+                        # 处理长文本显示 - 增加显示长度
+                        str_val = str(val) if val is not None else ""
+                        if len(str_val) > 80:  # 增加显示长度
+                            str_val = str_val[:77] + "..."
+                        values.append(str_val)
+                    else:
+                        values.append("")  # 如果列不存在，添加空值
                 
                 # 使用交替行颜色创建网格效果
                 row_tag = 'odd_row' if index % 2 == 0 else 'even_row'
                 item = self.tree.insert("", "end", values=values, tags=(row_tag,))
-                print(f"插入第{index+1}行: {values}")
+                print(f"插入第{actual_row_number}行: {values}")
                 
 
                 
             # 更新表格标题
             row_count = len(df)
-            col_count = len(df.columns)
+            total_col_count = len(df.columns)
+            visible_col_count = len(visible_data_columns)
+            hidden_col_count = self.table_manager.get_hidden_columns_count()
             ai_count = len(self.table_manager.get_ai_columns())
             
-            # 构建表格标题，包含筛选状态
-            title = f"📊 数据表格 - {row_count}行 {col_count}列 (AI列: {ai_count})"
+            # 构建表格标题，包含筛选状态和隐藏列信息
+            title = f"📊 数据表格 - {row_count}行 {visible_col_count}列 (AI列: {ai_count})"
+            if hidden_col_count > 0:
+                title += f" | 👁️‍🗨️ 隐藏 {hidden_col_count} 列"
             if self.filter_state['active']:
                 original_count = len(original_df)
                 filter_column = self.filter_state['column']
@@ -2209,7 +2250,7 @@ class AIExcelApp:
             if hasattr(self, 'highlighted_column') and self.highlighted_column is not None:
                 self.highlight_column(self.highlighted_column)
             
-            print(f"表格更新完成，显示{row_count}行{col_count}列")
+            print(f"表格更新完成，显示{row_count}行{visible_col_count}列")
         else:
             print("数据框为空")
             
@@ -2242,7 +2283,7 @@ class AIExcelApp:
             # 保存状态用于撤销
             self.save_state(f"创建AI列: {column_name}")
             
-            self.table_manager.add_ai_column(column_name, prompt_template, ai_model, processing_params, output_mode, output_fields)
+            self.table_manager.add_ai_column(column_name, prompt_template, ai_model, processing_params, output_mode, output_fields, result.get('field_mode', 'predefined'))
             
             if output_mode == "multi" and output_fields:
                 self.update_status(f"已添加多字段AI列: {column_name} (模型: {ai_model}, 字段: {', '.join(output_fields)})", "success")
@@ -3027,6 +3068,20 @@ class AIExcelApp:
         except Exception as e:
             messagebox.showerror("错误", f"打开查找替换对话框失败: {e}")
             
+    def show_random_export_dialog(self):
+        """显示随机导出对话框"""
+        if self.table_manager.get_dataframe() is None:
+            messagebox.showwarning("警告", "请先加载数据")
+            return
+            
+        try:
+            from random_export_dialog import show_random_export_dialog
+            result = show_random_export_dialog(self.root, self.table_manager)
+            if result and result.get("success"):
+                self.update_status(f"成功导出 {result.get('row_count', 0)} 行数据", "success")
+        except Exception as e:
+            messagebox.showerror("错误", f"打开随机导出对话框失败: {e}")
+            
     def quick_export_excel(self):
         """快速导出Excel（使用上次的选择）"""
         if self.table_manager.get_dataframe() is None:
@@ -3141,14 +3196,23 @@ class AIExcelApp:
             # 如果点击列头
             if clicked_column and not clicked_item:
                 col_index = int(clicked_column.replace('#', '')) - 1
-                if 0 <= col_index < len(df.columns):
-                    col_name = list(df.columns)[col_index]
+                # 跳过行号列（索引0）
+                if col_index == 0:  # 行号列，不处理
+                    return
+                col_index -= 1  # 调整索引，因为第一列是行号列
+                
+                # 获取可见列列表，而不是所有列
+                visible_columns = self.table_manager.get_visible_columns()
+                if 0 <= col_index < len(visible_columns):
+                    col_name = visible_columns[col_index]
+                    # 获取该列在原始数据框中的索引
+                    original_col_index = list(df.columns).index(col_name)
                     
                     # 更新选中信息
                     self.selection_info = {
                         'type': 'column',
                         'row_index': None,
-                        'column_index': col_index,
+                        'column_index': original_col_index,  # 使用原始数据框中的索引
                         'column_name': col_name
                     }
                     
@@ -3157,8 +3221,8 @@ class AIExcelApp:
                     col_type = "AI列" if is_ai else "普通列"
                     self.update_status(f"选中{col_type}: {col_name} (右键查看操作)", "normal")
                     
-                    # 高亮选中的列
-                    self.highlight_column(col_index)
+                    # 高亮选中的列（使用原始索引）
+                    self.highlight_column(original_col_index)
                     
                     # 清空内容预览（因为选中的是列头，不是具体单元格）
                     self.clear_content_preview()
@@ -3166,32 +3230,57 @@ class AIExcelApp:
             # 如果点击单元格
             elif clicked_column and clicked_item:
                 col_index = int(clicked_column.replace('#', '')) - 1
+                # 跳过行号列（索引0）
+                if col_index == 0:  # 行号列，不处理
+                    return
+                col_index -= 1  # 调整索引，因为第一列是行号列
                 selection = self.tree.selection()
                 
-                if selection and 0 <= col_index < len(df.columns):
+                # 获取可见列列表，而不是所有列
+                visible_columns = self.table_manager.get_visible_columns()
+                if selection and 0 <= col_index < len(visible_columns):
                     item = selection[0]
-                    row_index = self.tree.index(item)
-                    col_name = list(df.columns)[col_index]
+                    # 修复：从树视图项目的值中获取真实的行索引
+                    # 第一列（索引0）是行号列，包含实际的行索引
+                    item_values = self.tree.item(item, 'values')
+                    if item_values and len(item_values) > 0:
+                        try:
+                            # 行号列的值就是实际的行索引（从1开始），需要转换为0开始的索引
+                            row_index = int(item_values[0]) - 1
+                        except (ValueError, IndexError):
+                            # 如果解析失败，回退到原来的方法
+                            row_index = self.tree.index(item)
+                    else:
+                        row_index = self.tree.index(item)
                     
-                    # 更新选中信息
-                    self.selection_info = {
-                        'type': 'cell',
-                        'row_index': row_index,
-                        'column_index': col_index,
-                        'column_name': col_name
-                    }
+                    col_name = visible_columns[col_index]
+                    # 获取该列在原始数据框中的索引
+                    original_col_index = list(df.columns).index(col_name)
                     
-                    # 获取单元格内容并更新预览
-                    cell_content = df.iloc[row_index, col_index]
-                    self.update_content_preview(row_index, col_name, cell_content)
-                    
-                    ai_columns = self.table_manager.get_ai_columns()
-                    is_ai = col_name in ai_columns
-                    cell_type = "AI单元格" if is_ai else "单元格"
-                    self.update_status(f"选中{cell_type}: {col_name}[第{row_index+1}行] (双击编辑, 右键查看操作)", "normal")
-                    
-                    # 高亮选中单元格所在的列
-                    self.highlight_column(col_index)
+                    # 验证行索引是否有效
+                    if 0 <= row_index < len(df):
+                        # 更新选中信息
+                        self.selection_info = {
+                            'type': 'cell',
+                            'row_index': row_index,
+                            'column_index': original_col_index,  # 使用原始数据框中的索引
+                            'column_name': col_name
+                        }
+                        
+                        # 获取单元格内容并更新预览
+                        cell_content = df.iloc[row_index, original_col_index]
+                        self.update_content_preview(row_index, col_name, cell_content)
+                        
+                        ai_columns = self.table_manager.get_ai_columns()
+                        is_ai = col_name in ai_columns
+                        cell_type = "AI单元格" if is_ai else "单元格"
+                        self.update_status(f"选中{cell_type}: {col_name}[第{row_index+1}行] (双击编辑, 右键查看操作)", "normal")
+                        
+                        # 高亮选中单元格所在的列（使用原始索引）
+                        self.highlight_column(original_col_index)
+                    else:
+                        print(f"无效的行索引: {row_index}, 数据框长度: {len(df)}")
+                        self.update_status("选中的行索引无效", "error")
                     
         except Exception as e:
             print(f"选中处理错误: {e}")
@@ -3216,7 +3305,7 @@ class AIExcelApp:
                                        background='#e0f2fe',  # 更明显的浅蓝背景
                                        foreground='#0f172a')  # 深色文字
                 
-                # 为该列的所有行添加高亮效果
+                # 为该列的所有行添加高亮效果（注意：col_index+1是因为第一列是行号列）
                 for item in self.tree.get_children():
                     # 清除之前的高亮标签
                     current_tags = list(self.tree.item(item, 'tags'))
@@ -3231,14 +3320,17 @@ class AIExcelApp:
                 if col_index < len(columns):
                     col_name = columns[col_index]
                     ai_columns = self.table_manager.get_ai_columns()
+                    long_text_columns = self.table_manager.get_long_text_columns()
                     
                     # 设置高亮的列头文字（保留AI图标）
                     display_col_name = col_name
                     if col_name in ai_columns:
-                        display_col_name = f"🤖 {col_name}"
+                        display_col_name = f"★ {col_name} ★"  # AI列添加星号
+                    elif col_name in long_text_columns:
+                        display_col_name = f"📄 {col_name}"  # 长文本列添加文档图标
                     
-                    # 添加星号表示选中状态
-                    highlight_text = f"★ {display_col_name} ★"
+                    # 添加高亮标记
+                    highlight_text = f"🔸 {display_col_name} 🔸"
                     
                     try:
                         self.tree.heading(col_name, text=highlight_text)
@@ -3261,20 +3353,23 @@ class AIExcelApp:
                     current_tags = [tag for tag in current_tags if not tag.startswith('col_highlight_')]
                     self.tree.item(item, tags=current_tags)
                 
-                # 恢复列头文字（移除星号，并正确恢复AI列图标）
+                # 恢复列头文字（移除高亮标记，并正确恢复AI列图标）
                 df = self.table_manager.get_dataframe()
                 if df is not None and 0 <= self.highlighted_column < len(df.columns):
                     columns = list(df.columns)
                     col_name = columns[self.highlighted_column]
                     ai_columns = self.table_manager.get_ai_columns()
+                    long_text_columns = self.table_manager.get_long_text_columns()
                     
-                    # 根据是否为AI列设置正确的显示名称
+                    # 根据列类型设置正确的显示名称
                     display_col_name = col_name
                     if col_name in ai_columns:
-                        display_col_name = f"🤖 {col_name}"  # 恢复AI列图标
+                        display_col_name = f"★ {col_name} ★"  # AI列添加星号
+                    elif col_name in long_text_columns:
+                        display_col_name = f"📄 {col_name}"  # 长文本列添加文档图标
                         
                     try:
-                        # 恢复原始列头文字（包含AI图标）
+                        # 恢复原始列头文字（包含相应图标）
                         self.tree.heading(col_name, text=display_col_name)
                         print(f"恢复列头: {col_name} -> {display_col_name}")
                     except Exception as e:
@@ -3361,24 +3456,40 @@ class AIExcelApp:
                 self.update_status("没有数据可编辑", "error")
                 return
                 
-            column_names = list(df.columns)
-            if col_index >= len(column_names):
+            # 获取可见列列表，而不是所有列
+            visible_columns = self.table_manager.get_visible_columns()
+            if col_index >= len(visible_columns):
                 return
                 
-            col_name = column_names[col_index]
+            col_name = visible_columns[col_index]
+            # 获取该列在原始数据框中的索引
+            original_col_index = list(df.columns).index(col_name)
             
+            # 获取行索引 - 修复：从树视图项目的值中获取真实的行索引
+            item_values = self.tree.item(item, 'values')
+            if item_values and len(item_values) > 0:
+                try:
+                    # 行号列的值就是实际的行索引（从1开始），需要转换为0开始的索引
+                    row_index = int(item_values[0]) - 1
+                except (ValueError, IndexError):
+                    # 如果解析失败，回退到原来的方法
+                    row_index = self.tree.index(item)
+            else:
+                row_index = self.tree.index(item)
+            
+            # 验证行索引是否有效
+            if not (0 <= row_index < len(df)):
+                self.update_status(f"无效的行索引: {row_index}", "error")
+                return
+                
             # 获取当前值
             values = self.tree.item(item, 'values')
             if col_index < len(values):
                 current_value = values[col_index]
                 # 处理被截断的文本，从原始数据获取完整值
-                row_index = self.tree.index(item)
-                current_value = str(df.iloc[row_index, col_index])
+                current_value = str(df.iloc[row_index, original_col_index])
             else:
                 current_value = ""
-                
-            # 获取行索引
-            row_index = self.tree.index(item)
             
             # 创建编辑对话框
             self.edit_cell_dialog(row_index, col_name, current_value)
@@ -3961,7 +4072,11 @@ class AIExcelApp:
                 )
                 
                 if success:
+                    # 强制更新表格显示
                     self.update_table_display()
+                    # 强制刷新界面
+                    self.root.update_idletasks()
+                    
                     self.update_status(f"单元格 {col_name}[{row_index+1}] 处理完成", "success")
                     messagebox.showinfo("完成", f"单元格处理完成！\n列: {col_name}\n行: {row_index+1}")
                 else:
@@ -4070,8 +4185,11 @@ class AIExcelApp:
                     except Exception as e:
                         print(f"处理单元格 {col_name}[{row_index+1}] 时出错: {e}")
                         
-                # 更新显示
+                # 强制更新显示
                 self.update_table_display()
+                # 强制刷新界面
+                self.root.update_idletasks()
+                
                 self.update_status(f"第 {row_index+1} 行处理完成 ({success_count}/{total_count})", "success")
                 messagebox.showinfo("完成", f"第 {row_index+1} 行处理完成！\n成功: {success_count}/{total_count}")
                 
@@ -4084,6 +4202,9 @@ class AIExcelApp:
         column_widths = {}
         if self.tree["columns"]:
             for col_id in self.tree["columns"]:
+                # 跳过行号列，不保存其宽度
+                if col_id == "#":
+                    continue
                 column_widths[col_id] = self.tree.column(col_id, "width")
         return column_widths
 
@@ -4091,6 +4212,9 @@ class AIExcelApp:
         """应用保存的列宽设置"""
         try:
             for col, width in column_widths.items():
+                # 跳过行号列，保持其固定宽度
+                if col == "#":
+                    continue
                 if self.tree.exists(col) or col in self.tree['columns']:
                     self.tree.column(col, width=width)
         except Exception as e:
@@ -4173,12 +4297,49 @@ class AIExcelApp:
         else:
             self.root.quit()
 
+    def toggle_prompt_display(self):
+        """切换Prompt区域显示/隐藏"""
+        if self.show_prompt_var.get():
+            # 显示Prompt区域
+            if hasattr(self, 'current_preview_cell') and self.current_preview_cell:
+                col_name = self.current_preview_cell['col_name']
+                if col_name in self.table_manager.get_ai_columns():
+                    self.prompt_preview_frame.pack(fill=tk.BOTH, expand=True, pady=(10, 0))
+                    # 刷新prompt内容
+                    self.update_prompt_content()
+        else:
+            # 隐藏Prompt区域
+            self.prompt_preview_frame.pack_forget()
+    
+    def update_prompt_content(self):
+        """更新prompt内容显示"""
+        if hasattr(self, 'current_preview_cell') and self.current_preview_cell:
+            row_index = self.current_preview_cell['row_index']
+            col_name = self.current_preview_cell['col_name']
+            
+            if self.show_full_prompt_var.get():
+                # 显示完整Prompt
+                full_prompt = self.ai_processor.build_full_prompt(row_index, col_name, self.table_manager)
+                self.prompt_text.config(state='normal')
+                self.prompt_text.delete("1.0", tk.END)
+                self.prompt_text.insert("1.0", full_prompt)
+                self.prompt_text.config(state='disabled')
+            else:
+                # 显示简化Prompt
+                simple_prompt = self.table_manager.get_ai_column_prompt(col_name)
+                self.prompt_text.config(state='normal')
+                self.prompt_text.delete("1.0", tk.END)
+                self.prompt_text.insert("1.0", simple_prompt)
+                self.prompt_text.config(state='disabled')
+
     def toggle_full_prompt_display(self):
         """切换完整Prompt的显示/隐藏"""
         if self.show_full_prompt_var.get():
             self.prompt_text.config(height=10) # 展开高度
         else:
             self.prompt_text.config(height=3) # 默认高度
+        # 更新prompt内容
+        self.update_prompt_content()
 
     def show_ai_column_progress(self, col_name):
         """显示AI列处理进度对话框"""
@@ -4187,8 +4348,8 @@ class AIExcelApp:
             messagebox.showwarning("警告", "没有数据")
             return
             
-        # 获取处理状态
-        status = self.ai_processor.get_column_processing_status(df, col_name)
+        # 获取处理状态, 传入table_manager
+        status = self.ai_processor.get_column_processing_status(df, col_name, self.table_manager)
         if status is None:
             messagebox.showwarning("警告", f"列 '{col_name}' 不存在")
             return
@@ -4538,8 +4699,10 @@ class AIExcelApp:
                                 
                             close_button.config(state='normal')
                             
-                            # 更新表格显示
+                            # 强制更新表格显示
                             self.update_table_display()
+                            # 强制刷新界面
+                            self.root.update_idletasks()
                             
                         except tk.TclError:
                             pass  # 窗口已关闭
@@ -4666,6 +4829,187 @@ class AIExcelApp:
         except Exception as e:
             self.update_status(f"撤销失败: {str(e)}", "error")
             print(f"撤销操作失败: {e}")
+    
+    def manual_refresh_table(self):
+        """手动刷新表格显示"""
+        try:
+            print("=== 手动刷新表格 ===")
+            
+            # 获取当前数据框状态
+            df = self.table_manager.get_dataframe()
+            if df is None:
+                self.update_status("没有数据需要刷新", "warning")
+                messagebox.showwarning("提示", "没有数据需要刷新")
+                return
+            
+            print(f"当前数据框形状: {df.shape}")
+            print(f"当前列名: {list(df.columns)}")
+            
+            # 强制更新表格显示
+            self.update_table_display()
+            
+            # 强制刷新界面
+            self.root.update_idletasks()
+            self.root.update()
+            
+            # 清除并重新设置内容预览
+            self.clear_content_preview()
+            
+            # 更新状态
+            self.update_status("✅ 表格已手动刷新", "success")
+            
+            # 显示刷新信息
+            messagebox.showinfo("刷新完成", 
+                              f"表格已刷新！\n\n"
+                              f"📊 数据行数: {len(df)}\n"
+                              f"📋 列数: {len(df.columns)}\n"
+                              f"🤖 AI列数: {len(self.table_manager.get_ai_columns())}")
+            
+        except Exception as e:
+            error_msg = f"刷新表格时出错: {str(e)}"
+            print(f"❌ {error_msg}")
+            self.update_status("刷新失败", "error")
+            messagebox.showerror("刷新失败", error_msg)
+    
+    def hide_column(self, column_name):
+        """隐藏列"""
+        try:
+            if self.table_manager.hide_column(column_name):
+                self.update_table_display()
+                self.update_title()
+                self.update_status(f"已隐藏列: {column_name}", "success")
+                
+                # 清空内容预览（如果隐藏的是当前选中的列）
+                if (hasattr(self, 'selection_info') and 
+                    self.selection_info.get('column_name') == column_name):
+                    self.clear_content_preview()
+            else:
+                self.update_status(f"隐藏列失败: {column_name}", "error")
+        except Exception as e:
+            self.update_status(f"隐藏列错误: {str(e)}", "error")
+            print(f"隐藏列错误: {e}")
+    
+    def show_column(self, column_name):
+        """显示列"""
+        try:
+            if self.table_manager.show_column(column_name):
+                self.update_table_display()
+                self.update_title()
+                self.update_status(f"已显示列: {column_name}", "success")
+            else:
+                self.update_status(f"显示列失败: {column_name}", "error")
+        except Exception as e:
+            self.update_status(f"显示列错误: {str(e)}", "error")
+            print(f"显示列错误: {e}")
+    
+    def show_hidden_columns_manager(self):
+        """显示隐藏列管理对话框"""
+        hidden_columns = self.table_manager.get_hidden_columns()
+        if not hidden_columns:
+            messagebox.showinfo("提示", "当前没有隐藏的列")
+            return
+        
+        # 创建管理对话框
+        dialog = tk.Toplevel(self.root)
+        dialog.title("管理隐藏列")
+        dialog.geometry("500x400")
+        dialog.transient(self.root)
+        dialog.grab_set()
+        
+        # 居中显示
+        dialog.update_idletasks()
+        x = (dialog.winfo_screenwidth() // 2) - (500 // 2)
+        y = (dialog.winfo_screenheight() // 2) - (400 // 2)
+        dialog.geometry(f"500x400+{x}+{y}")
+        
+        # 标题
+        title_frame = ttk.Frame(dialog)
+        title_frame.pack(fill=tk.X, padx=10, pady=10)
+        
+        ttk.Label(title_frame, text="👁️‍🗨️ 隐藏列管理", 
+                 style='Title.TLabel', font=('Arial', 14, 'bold')).pack()
+        
+        ttk.Label(title_frame, text=f"当前隐藏了 {len(hidden_columns)} 列", 
+                 style='Subtitle.TLabel').pack(pady=(5, 0))
+        
+        # 列表框架
+        list_frame = ttk.LabelFrame(dialog, text="隐藏的列", padding=10)
+        list_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+        
+        # 创建列表框和滚动条
+        list_container = ttk.Frame(list_frame)
+        list_container.pack(fill=tk.BOTH, expand=True)
+        
+        # 滚动条
+        scrollbar = ttk.Scrollbar(list_container)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        # 列表框
+        listbox = tk.Listbox(list_container, yscrollcommand=scrollbar.set, 
+                            font=('Arial', 10), height=10)
+        listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.config(command=listbox.yview)
+        
+        # 填充隐藏的列
+        ai_columns = self.table_manager.get_ai_columns()
+        long_text_columns = self.table_manager.get_long_text_columns()
+        
+        for col_name in hidden_columns:
+            # 添加列类型标识
+            if col_name in ai_columns:
+                display_name = f"★ {col_name} (AI列)"
+            elif col_name in long_text_columns:
+                display_name = f"📄 {col_name} (长文本列)"
+            else:
+                display_name = f"📊 {col_name} (普通列)"
+            listbox.insert(tk.END, display_name)
+        
+        # 按钮框架
+        button_frame = ttk.Frame(dialog)
+        button_frame.pack(fill=tk.X, padx=10, pady=10)
+        
+        def show_selected():
+            """显示选中的列"""
+            selection = listbox.curselection()
+            if selection:
+                index = selection[0]
+                col_name = hidden_columns[index]
+                self.show_column(col_name)
+                dialog.destroy()
+        
+        def show_all():
+            """显示所有隐藏的列"""
+            if messagebox.askyesno("确认", f"确定要显示所有 {len(hidden_columns)} 个隐藏的列吗？"):
+                self.table_manager.show_all_columns()
+                self.update_table_display()
+                self.update_title()
+                self.update_status(f"已显示所有隐藏的列 ({len(hidden_columns)} 列)", "success")
+                dialog.destroy()
+        
+        def close_dialog():
+            dialog.destroy()
+        
+        # 按钮
+        ttk.Button(button_frame, text="👁️ 显示选中", 
+                  command=show_selected).pack(side=tk.LEFT, padx=5)
+        ttk.Button(button_frame, text="👁️ 显示全部", 
+                  command=show_all).pack(side=tk.LEFT, padx=5)
+        ttk.Button(button_frame, text="关闭", 
+                  command=close_dialog).pack(side=tk.RIGHT, padx=5)
+        
+        # 提示信息
+        tip_frame = ttk.Frame(dialog)
+        tip_frame.pack(fill=tk.X, padx=10, pady=(0, 10))
+        
+        tip_text = "💡 提示：双击列表项可快速显示该列"
+        ttk.Label(tip_frame, text=tip_text, 
+                 style='Subtitle.TLabel', foreground='gray').pack()
+        
+        # 双击事件
+        def on_double_click(event):
+            show_selected()
+        
+        listbox.bind('<Double-1>', on_double_click)
 
 def main():
     root = tk.Tk()
